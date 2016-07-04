@@ -121,6 +121,9 @@ perftoolsinclude_HEADERS =
 nodist_perftoolsinclude_HEADERS = src/gperftools/tcmalloc.h
 noinst_HEADERS = src/gperftools/tcmalloc.h.in
 
+# Explicitly export typed tcmalloc header!
+perftoolsinclude_HEADERS += src/gperftools/typed_tcmalloc.h
+
 # This is provided for backwards compatibility.  It is populated by
 # files that just forward to the canonical location in
 # perftoolsincludedir.

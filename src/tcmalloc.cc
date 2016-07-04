@@ -89,6 +89,7 @@
 
 #include "config.h"
 #include <gperftools/tcmalloc.h>
+#include <gperftools/typed_tcmalloc.h> // for TypeTag.
 
 #include <errno.h>                      // for ENOMEM, EINVAL, errno
 #if defined HAVE_STDINT_H
@@ -1149,7 +1150,8 @@ inline bool should_report_large(Length num_pages) {
 }
 
 // Helper for do_malloc().
-inline void* do_malloc_pages(ThreadCache* heap, size_t size) {
+// TODO(chris): Implement for do_malloc_pages (central free list stuff)
+inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
   void* result;
   bool report_large;
 
@@ -1179,44 +1181,49 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size) {
   return result;
 }
 
-ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size) {
+ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type = 0) {
   ASSERT(Static::IsInited());
   ASSERT(heap != NULL);
   size_t cl = Static::sizemap()->SizeClass(size);
   size = Static::sizemap()->class_to_size(cl);
 
+  // TODO(chris): Implement types for Sampled Allocations
   if (UNLIKELY(heap->SampleAllocation(size))) {
     return DoSampledAllocation(size);
   } else {
     // The common case, and also the simplest.  This just pops the
     // size-appropriate freelist, after replenishing it if it's empty.
-    return CheckedMallocResult(heap->Allocate(size, cl));
+    return CheckedMallocResult(heap->Allocate(size, cl, type));
   }
 }
 
-ALWAYS_INLINE void* do_malloc(size_t size) {
+ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type = 0) {
   if (ThreadCache::have_tls) {
     if (LIKELY(size < ThreadCache::MinSizeForSlowPath())) {
-      return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size);
+      return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size, type);
     }
     if (UNLIKELY(ThreadCache::IsUseEmergencyMalloc())) {
-      return tcmalloc::EmergencyMalloc(size);
+      return tcmalloc::EmergencyMalloc(size); // TODO(chris): implement for EmergencyMalloc
     }
   }
 
   if (size <= kMaxSize) {
-    return do_malloc_small(ThreadCache::GetCache(), size);
+    return do_malloc_small(ThreadCache::GetCache(), size, type);
   } else {
-    return do_malloc_pages(ThreadCache::GetCache(), size);
+    return do_malloc_pages(ThreadCache::GetCache(), size, type);
   }
+}
+
+ALWAYS_INLINE void* do_malloc(size_t size) {
+  return do_typed_malloc(size, 0);
 }
 
 static void *retry_malloc(void* size) {
   return do_malloc(reinterpret_cast<size_t>(size));
 }
 
-ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size) {
-  void *rv = do_malloc(size);
+ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size, TypeTag type = 0) {
+  void *rv = do_typed_malloc(size, type);
   if (LIKELY(rv != NULL)) {
     return rv;
   }
@@ -1593,6 +1600,16 @@ extern "C" PERFTOOLS_DLL_DECL int tc_set_new_mode(int flag) PERFTOOLS_THROW {
 #if defined(__GNUC__) && defined(__ELF__) && !defined(TCMALLOC_NO_ALIASES)
 #define TC_ALIAS(name) __attribute__((alias(#name)))
 #endif
+
+
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_malloc(size_t size, TypeTag type)
+  PERFTOOLS_THROW {
+  void* result = do_malloc_or_cpp_alloc(size, type);
+
+  MallocHook::InvokeNewHook(result, size);
+  return result;
+}
+
 
 // CAVEAT: The code structure below ensures that MallocHook methods are always
 //         called from the stack frame of the invoked allocation function.

@@ -35,6 +35,9 @@
 #define TCMALLOC_THREAD_CACHE_H_
 
 #include <config.h>
+
+#include <gperftools/typed_tcmalloc.h> // for TypeTag.
+
 #ifdef HAVE_PTHREAD
 #include <pthread.h>                    // for pthread_t, pthread_key_t
 #endif
@@ -89,7 +92,7 @@ class ThreadCache {
 
   // Allocate an object of the given size and class. The size given
   // must be the same as the size of the class in the size map.
-  void* Allocate(size_t size, size_t cl);
+  void* Allocate(size_t size, size_t cl, TypeTag type = 0);
   void Deallocate(void* ptr, size_t size_class);
 
   void Scavenge();
@@ -359,7 +362,7 @@ inline bool ThreadCache::SampleAllocation(size_t k) {
 #endif
 }
 
-inline void* ThreadCache::Allocate(size_t size, size_t cl) {
+inline void* ThreadCache::Allocate(size_t size, size_t cl, TypeTag type) {
   ASSERT(size <= kMaxSize);
   ASSERT(size == Static::sizemap()->ByteSizeForClass(cl));
 
