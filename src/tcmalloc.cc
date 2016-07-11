@@ -196,6 +196,11 @@ DEFINE_int64(tcmalloc_large_alloc_report_threshold,
              "logging unless the flag is overridden.  Set to 0 to "
              "disable reporting entirely.");
 
+DEFINE_int64(tcmalloc_number_of_types,
+             EnvToInt64("TCMALLOC_NUMBER_OF_TYPES",
+                        0),
+             "The number of types to use.");
+
 
 // We already declared these functions in tcmalloc.h, but we have to
 // declare them again to give them an ATTRIBUTE_SECTION: we want to
