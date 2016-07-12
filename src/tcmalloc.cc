@@ -198,7 +198,7 @@ DEFINE_int64(tcmalloc_large_alloc_report_threshold,
 
 DEFINE_int64(tcmalloc_number_of_types,
              EnvToInt64("TCMALLOC_NUMBER_OF_TYPES",
-                        0),
+                        1024),
              "The number of types to use.");
 
 
