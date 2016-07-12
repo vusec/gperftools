@@ -62,6 +62,7 @@
 #include "static_vars.h"       // for Static
 
 DECLARE_int64(tcmalloc_sample_parameter);
+DECLARE_int64(tcmalloc_number_of_types);
 
 namespace tcmalloc {
 
@@ -232,9 +233,12 @@ class ThreadCache {
     }
   };
 
+  // Get a free list based on size class and type tag.
+  FreeList* GetTypedFreeList (size_t cl, TypeTag type);
+
   // Gets and returns an object from the central cache, and, if possible,
   // also adds some objects of that size class to this thread cache.
-  void* FetchFromCentralCache(size_t cl, size_t byte_size);
+  void* FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type);
 
   // Releases some number of items from src.  Adjusts the list's max_length
   // to eventually converge on num_objects_to_move(cl).
@@ -326,6 +330,9 @@ class ThreadCache {
   Sampler       sampler_;               // A sampler
 
   FreeList      list_[kNumClasses];     // Array indexed by size-class
+  PageHeapAllocator<FreeList[kNumClasses]> freelist_array_allocator_;
+  typedef MapSelector<kAddressBits>::Type FreeListArrayMap;
+  FreeListArrayMap typed_freelist_map_;
 
   pthread_t     tid_;                   // Which thread owns it
   bool          in_setspecific_;        // In call to pthread_setspecific?
@@ -362,14 +369,52 @@ inline bool ThreadCache::SampleAllocation(size_t k) {
 #endif
 }
 
+inline ThreadCache::FreeList*
+ThreadCache::GetTypedFreeList (size_t cl, TypeTag type) {
+  // Fast path: no type information available.
+  if (LIKELY(!type)) {
+    return &list_[cl];
+  }
+
+  FreeList *freelist_array;
+  void * ptr = typed_freelist_map_.get(type);
+
+  // If no such list exist, we must create it!
+  if (UNLIKELY(!ptr)) {
+    ptr = (void*)freelist_array_allocator_.New();
+    freelist_array =
+      reinterpret_cast<FreeList*>(ptr);
+
+    for (size_t i = 0; i < kNumClasses; ++i) {
+      freelist_array[i].Init();
+    }
+
+    typed_freelist_map_.set(type, freelist_array);
+  } else {
+    // Get a free list array based on type.
+    freelist_array = reinterpret_cast<FreeList*>(ptr);
+  }
+
+  // Now that we must have a FreeList array. Now we can extract the free
+  ASSERT(freelist_array != NULL);
+
+  return &freelist_array[cl];
+}
+
 inline void* ThreadCache::Allocate(size_t size, size_t cl, TypeTag type) {
   ASSERT(size <= kMaxSize);
   ASSERT(size == Static::sizemap()->ByteSizeForClass(cl));
 
-  FreeList* list = &list_[cl];
+  FreeList* list = GetTypedFreeList(cl, type);
   if (UNLIKELY(list->empty())) {
-    return FetchFromCentralCache(cl, size);
+    return FetchFromCentralCache(cl, size, type); // TODO(chris):
+                                                  // Modify this
+                                                  // function to
+                                                  // allocate for
+                                                  // typed allocations
+                                                  // as well.
   }
+
   size_ -= size;
   return list->Pop();
 }

@@ -99,6 +99,11 @@ void ThreadCache::Init(pthread_t tid) {
     list_[cl].Init();
   }
 
+  typed_freelist_map_ = FreeListArrayMap(MetaDataAlloc);
+  // Ensure that we have enough room for the types we will use.
+  typed_freelist_map_.Ensure(1, FLAGS_tcmalloc_number_of_types);
+  freelist_array_allocator_.Init();
+
   uint32_t sampler_seed;
   memcpy(&sampler_seed, &tid, sizeof(sampler_seed));
   sampler_.Init(sampler_seed);
@@ -115,8 +120,9 @@ void ThreadCache::Cleanup() {
 
 // Remove some objects of class "cl" from central cache and add to thread heap.
 // On success, return the first object for immediate use; otherwise return NULL.
-void* ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size) {
-  FreeList* list = &list_[cl];
+void*
+ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
+  FreeList* list = GetTypedFreeList(cl, type);
   ASSERT(list->empty());
   const int batch_size = Static::sizemap()->num_objects_to_move(cl);
 
