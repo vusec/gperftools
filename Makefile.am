@@ -121,9 +121,6 @@ perftoolsinclude_HEADERS =
 nodist_perftoolsinclude_HEADERS = src/gperftools/tcmalloc.h
 noinst_HEADERS = src/gperftools/tcmalloc.h.in
 
-# Explicitly export typed tcmalloc header!
-perftoolsinclude_HEADERS += src/gperftools/typed_tcmalloc.h
-
 # This is provided for backwards compatibility.  It is populated by
 # files that just forward to the canonical location in
 # perftoolsincludedir.
@@ -345,6 +342,22 @@ atomicops_unittest_SOURCES = src/tests/atomicops_unittest.cc \
                              $(ATOMICOPS_UNITTEST_INCLUDES)
 atomicops_unittest_LDADD = $(LIBSPINLOCK)
 
+
+### ------- typed allocations
+
+### Explicitly export typed tcmalloc header!
+perftoolsinclude_HEADERS += src/gperftools/typed_tcmalloc.h
+
+### unit tests
+TESTS += typed_tcmalloc_unittest
+TYPED_TCMALLOC_UNITTEST_INCLUDES = src/gperftools/typed_tcmalloc.h \
+                                   src/static_vars.h \
+                                   src/span.h \
+                                   src/common.h \
+                                   $(LOGGING_INCLUDES)
+typed_tcmalloc_unittest_SOURCES = src/tests/typed_tcmalloc_unittest.cc \
+                                  $(TYPED_TCMALLOC_UNITTEST_INCLUDES)
+typed_tcmalloc_unittest_LDADD = $(LIBTCMALLOC) liblogging.la
 
 ### ------- stack trace
 

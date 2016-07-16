@@ -143,3 +143,4 @@
 /thread_dealloc_unittest.exe
 /doxygen-docs/
 cscope.*
+/typed_tcmalloc_unittest
