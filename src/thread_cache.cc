@@ -132,6 +132,18 @@ ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
       &start, &end, num_to_move);
 
   ASSERT((start == NULL) == (fetch_count == 0));
+
+  // Set type for allocated span.
+  if (UNLIKELY(type)) {
+    const PageID p = reinterpret_cast<uintptr_t>(start) >> kPageShift;
+    Span *span = Static::pageheap()->GetDescriptor(p);
+
+    ASSERT(span != NULL);
+    ASSERT(span->type == 0 || span->type == type);
+
+    span->type = type;
+  }
+
   if (--fetch_count >= 0) {
     size_ += byte_size * fetch_count;
     list->PushRange(fetch_count, SLL_Next(start), end);
@@ -155,6 +167,7 @@ ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
     ASSERT(new_length % batch_size == 0);
     list->set_max_length(new_length);
   }
+
   return start;
 }
 

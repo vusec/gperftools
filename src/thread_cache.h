@@ -94,7 +94,7 @@ class ThreadCache {
   // Allocate an object of the given size and class. The size given
   // must be the same as the size of the class in the size map.
   void* Allocate(size_t size, size_t cl, TypeTag type = 0);
-  void Deallocate(void* ptr, size_t size_class);
+  void Deallocate(void* ptr, size_t size_class, TypeTag = 0);
 
   void Scavenge();
 
@@ -407,20 +407,20 @@ inline void* ThreadCache::Allocate(size_t size, size_t cl, TypeTag type) {
 
   FreeList* list = GetTypedFreeList(cl, type);
   if (UNLIKELY(list->empty())) {
-    return FetchFromCentralCache(cl, size, type); // TODO(chris):
-                                                  // Modify this
-                                                  // function to
-                                                  // allocate for
-                                                  // typed allocations
-                                                  // as well.
+    return FetchFromCentralCache(cl, size, type);
   }
 
   size_ -= size;
   return list->Pop();
 }
 
-inline void ThreadCache::Deallocate(void* ptr, size_t cl) {
-  FreeList* list = &list_[cl];
+inline void ThreadCache::Deallocate(void* ptr, size_t cl, TypeTag type) {
+  const PageID p = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+  Span *span = Static::pageheap()->GetDescriptor(p);
+
+  ASSERT(span != NULL);
+
+  FreeList* list = GetTypedFreeList(cl, span->type);
   size_ += Static::sizemap()->ByteSizeForClass(cl);
   ssize_t size_headroom = max_size_ - size_ - 1;
 
