@@ -45,6 +45,8 @@
 #include "base/googleinit.h"
 #include "maybe_threads.h"
 
+DECLARE_int64(tcmalloc_number_of_types);
+
 namespace tcmalloc {
 
 #if defined(HAVE_FORK) && defined(HAVE_PTHREAD)
@@ -77,6 +79,9 @@ PageHeapAllocator<StackTraceTable::Bucket> Static::bucket_allocator_;
 StackTrace* Static::growth_stacks_ = NULL;
 PageHeap* Static::pageheap_ = NULL;
 
+PageHeapAllocator<CentralFreeListPadded[kNumClasses]>
+  Static::centralfreelist_array_allocator_;
+Static::CentralFreeListArrayMap Static::typed_centralfreelist_map_(MetaDataAlloc);
 
 void Static::InitStaticVars() {
   sizemap_.Init();
@@ -90,6 +95,11 @@ void Static::InitStaticVars() {
   for (int i = 0; i < kNumClasses; ++i) {
     central_cache_[i].Init(i);
   }
+
+  // Ensure that we have enough room for the types we will use.
+  Static::typed_centralfreelist_map_ = Static::CentralFreeListArrayMap(MetaDataAlloc);
+  typed_centralfreelist_map_.Ensure(1, FLAGS_tcmalloc_number_of_types);
+  centralfreelist_array_allocator_.Init();
 
   // It's important to have PageHeap allocated, not in static storage,
   // so that HeapLeakChecker does not consider all the byte patterns stored

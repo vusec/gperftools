@@ -101,6 +101,12 @@ class Static {
   static Span sampled_objects_;
   static PageHeapAllocator<StackTraceTable::Bucket> bucket_allocator_;
 
+  static PageHeapAllocator<CentralFreeListPadded[kNumClasses]>
+    centralfreelist_array_allocator_;
+  typedef MapSelector<kAddressBits>::Type CentralFreeListArrayMap;
+  static CentralFreeListArrayMap typed_centralfreelist_map_;
+
+
   // Linked list of stack traces recorded every time we allocated memory
   // from the system.  Useful for finding allocation sites that cause
   // increase in the footprint of the system.  The linked list pointer
