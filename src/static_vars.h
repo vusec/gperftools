@@ -57,7 +57,7 @@ class Static {
 
   // Central cache -- an array of free-lists, one per size-class.
   // We have a separate lock per free-list to reduce contention.
-  static CentralFreeListPadded* central_cache() { return central_cache_; }
+  static CentralFreeListPadded* central_cache(TypeTag type = 0);
 
   static SizeMap* sizemap() { return &sizemap_; }
 
@@ -87,6 +87,9 @@ class Static {
   static bool IsInited() { return pageheap() != NULL; }
 
  private:
+  // Create typed central cache if it does not exist.
+  static inline void EnsureTypedCentralCache();
+
   static SpinLock pageheap_lock_;
 
   // These static variables require explicit initialization.  We cannot
@@ -104,7 +107,7 @@ class Static {
   static PageHeapAllocator<CentralFreeListPadded[kNumClasses]>
     centralfreelist_array_allocator_;
   typedef MapSelector<kAddressBits>::Type CentralFreeListArrayMap;
-  static CentralFreeListArrayMap typed_centralfreelist_map_;
+  static CentralFreeListArrayMap* typed_centralfreelist_map_;
 
 
   // Linked list of stack traces recorded every time we allocated memory

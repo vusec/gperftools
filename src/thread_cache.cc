@@ -101,7 +101,8 @@ void ThreadCache::Init(pthread_t tid) {
 
   typed_freelist_map_ = FreeListArrayMap(MetaDataAlloc);
   // Ensure that we have enough room for the types we will use.
-  typed_freelist_map_.Ensure(1, FLAGS_tcmalloc_number_of_types);
+  bool result = typed_freelist_map_.Ensure(1, FLAGS_tcmalloc_number_of_types);
+  CHECK_CONDITION(result);
   freelist_array_allocator_.Init();
 
   uint32_t sampler_seed;
@@ -128,7 +129,7 @@ ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
 
   const int num_to_move = min<int>(list->max_length(), batch_size);
   void *start, *end;
-  int fetch_count = Static::central_cache()[cl].RemoveRange(
+  int fetch_count = Static::central_cache(type)[cl].RemoveRange(
       &start, &end, num_to_move);
 
   ASSERT((start == NULL) == (fetch_count == 0));

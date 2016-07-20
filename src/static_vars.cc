@@ -81,7 +81,7 @@ PageHeap* Static::pageheap_ = NULL;
 
 PageHeapAllocator<CentralFreeListPadded[kNumClasses]>
   Static::centralfreelist_array_allocator_;
-Static::CentralFreeListArrayMap Static::typed_centralfreelist_map_(MetaDataAlloc);
+Static::CentralFreeListArrayMap* Static::typed_centralfreelist_map_ = NULL;
 
 void Static::InitStaticVars() {
   sizemap_.Init();
@@ -96,9 +96,6 @@ void Static::InitStaticVars() {
     central_cache_[i].Init(i);
   }
 
-  // Ensure that we have enough room for the types we will use.
-  Static::typed_centralfreelist_map_ = Static::CentralFreeListArrayMap(MetaDataAlloc);
-  typed_centralfreelist_map_.Ensure(1, FLAGS_tcmalloc_number_of_types);
   centralfreelist_array_allocator_.Init();
 
   // It's important to have PageHeap allocated, not in static storage,
@@ -115,6 +112,40 @@ void Static::InitStaticVars() {
 
   DLL_Init(&sampled_objects_);
   Sampler::InitStatics();
+}
+
+void Static::EnsureTypedCentralCache() {
+  if (UNLIKELY(!typed_centralfreelist_map_)) {
+    typed_centralfreelist_map_ =
+      new (MetaDataAlloc(sizeof(CentralFreeListArrayMap)))
+      CentralFreeListArrayMap(MetaDataAlloc);
+
+    bool result = typed_centralfreelist_map_->
+      Ensure(1, FLAGS_tcmalloc_number_of_types);
+    CHECK_CONDITION(result);
+  }
+}
+
+CentralFreeListPadded* Static::central_cache(TypeTag type) {
+  if (UNLIKELY(type)) {
+    EnsureTypedCentralCache();
+    void * ptr = Static::typed_centralfreelist_map_->get(type);
+
+    if (UNLIKELY(!ptr)) {
+      ptr = (void*)centralfreelist_array_allocator_.New();
+
+      for (size_t i = 0; i < kNumClasses; ++i) {
+        static_cast<CentralFreeListPadded*>(ptr)[i].Init(i);
+      }
+
+      // typed_centralfreelist_map_->set((PageID)123, (void*)0x123456);
+      typed_centralfreelist_map_->set((PageID)type, (void*)ptr);
+    }
+
+    return static_cast<CentralFreeListPadded*>(ptr);
+  } else {
+    return central_cache_;
+  }
 }
 
 
