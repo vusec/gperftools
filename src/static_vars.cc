@@ -97,6 +97,8 @@ void Static::InitStaticVars() {
   }
 
   centralfreelist_array_allocator_.Init();
+  EnsureTypedCentralCache();
+
 
   // It's important to have PageHeap allocated, not in static storage,
   // so that HeapLeakChecker does not consider all the byte patterns stored
@@ -128,7 +130,6 @@ void Static::EnsureTypedCentralCache() {
 
 CentralFreeListPadded* Static::central_cache(TypeTag type) {
   if (UNLIKELY(type)) {
-    EnsureTypedCentralCache();
     void * ptr = Static::typed_centralfreelist_map_->get(type);
 
     if (UNLIKELY(!ptr)) {
