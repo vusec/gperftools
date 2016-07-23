@@ -1168,7 +1168,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
   // from possibility of overflow, which rounding up could produce.
   //
   // See https://github.com/gperftools/gperftools/issues/723
-  if (heap->SampleAllocation(size)) {
+  if (UNLIKELY(!type && heap->SampleAllocation(size))) {
     result = DoSampledAllocation(size);
 
     SpinLockHolder h(Static::pageheap_lock());
@@ -1193,7 +1193,7 @@ ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type
   size = Static::sizemap()->class_to_size(cl);
 
   // TODO(chris): Implement types for Sampled Allocations
-  if (UNLIKELY(heap->SampleAllocation(size))) {
+  if (UNLIKELY(!type && heap->SampleAllocation(size))) {
     return DoSampledAllocation(size);
   } else {
     // The common case, and also the simplest.  This just pops the
