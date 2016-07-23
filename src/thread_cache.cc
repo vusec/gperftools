@@ -101,7 +101,8 @@ void ThreadCache::Init(pthread_t tid) {
 
   typed_freelist_map_ = FreeListArrayMap(MetaDataAlloc);
   // Ensure that we have enough room for the types we will use.
-  bool result = typed_freelist_map_.Ensure(1, FLAGS_tcmalloc_number_of_types);
+  // TODO(chris): move '1024' to a constant defined in common.h
+  bool result = typed_freelist_map_.Ensure(1, EnvToInt64("TCMALLOC_NUMBER_OF_TYPES", 1024));
   CHECK_CONDITION(result);
   freelist_array_allocator_.Init();
 

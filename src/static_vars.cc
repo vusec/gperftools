@@ -122,8 +122,9 @@ void Static::EnsureTypedCentralCache() {
       new (MetaDataAlloc(sizeof(CentralFreeListArrayMap)))
       CentralFreeListArrayMap(MetaDataAlloc);
 
+    // TODO(chris): move '1024' to a constant defined in common.h
     bool result = typed_centralfreelist_map_->
-      Ensure(1, FLAGS_tcmalloc_number_of_types);
+      Ensure(1, EnvToInt64("TCMALLOC_NUMBER_OF_TYPES", 1024));
     CHECK_CONDITION(result);
   }
 }
