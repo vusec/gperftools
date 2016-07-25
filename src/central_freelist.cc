@@ -44,7 +44,8 @@ using std::max;
 
 namespace tcmalloc {
 
-void CentralFreeList::Init(size_t cl) {
+void CentralFreeList::Init(size_t cl, TypeTag type) {
+  type_ = type;
   size_class_ = cl;
   tcmalloc::DLL_Init(&empty_);
   tcmalloc::DLL_Init(&nonempty_);
@@ -229,6 +230,10 @@ bool CentralFreeList::ShrinkCache(int locked_size_class, bool force)
 }
 
 void CentralFreeList::InsertRange(void *start, void *end, int N) {
+  // TODO(chris): If the length of the typed data divides a page, we
+  // can safely give the range back.
+  if (type_) return;
+
   SpinLockHolder h(&lock_);
   if (N == Static::sizemap()->num_objects_to_move(size_class_) &&
     MakeCacheSpace()) {

@@ -54,7 +54,7 @@ class CentralFreeList {
   // lock_ state.
   CentralFreeList() : lock_(base::LINKER_INITIALIZED) { }
 
-  void Init(size_t cl);
+  void Init(size_t cl, TypeTag type);
 
   // These methods all do internal locking.
 
@@ -164,6 +164,7 @@ class CentralFreeList {
   SpinLock lock_;
 
   // We keep linked lists of empty and non-empty spans.
+  TypeTag  type_;
   size_t   size_class_;     // My size class
   Span     empty_;          // Dummy header for list of empty spans
   Span     nonempty_;       // Dummy header for list of non-empty spans

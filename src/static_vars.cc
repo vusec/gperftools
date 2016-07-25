@@ -93,7 +93,7 @@ void Static::InitStaticVars() {
   // Do a bit of sanitizing: make sure central_cache is aligned properly
   CHECK_CONDITION((sizeof(central_cache_[0]) % 64) == 0);
   for (int i = 0; i < kNumClasses; ++i) {
-    central_cache_[i].Init(i);
+    central_cache_[i].Init(i, 0); // Initialize typeless caches
   }
 
   centralfreelist_array_allocator_.Init();
@@ -137,7 +137,7 @@ CentralFreeListPadded* Static::central_cache(TypeTag type) {
       ptr = (void*)centralfreelist_array_allocator_.New();
 
       for (size_t i = 0; i < kNumClasses; ++i) {
-        static_cast<CentralFreeListPadded*>(ptr)[i].Init(i);
+        static_cast<CentralFreeListPadded*>(ptr)[i].Init(i, type);
       }
 
       // typed_centralfreelist_map_->set((PageID)123, (void*)0x123456);

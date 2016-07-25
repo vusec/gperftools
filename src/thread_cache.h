@@ -96,7 +96,7 @@ class ThreadCache {
   void* Allocate(size_t size, size_t cl, TypeTag type = 0);
   void Deallocate(void* ptr, size_t size_class);
 
-  void Scavenge();
+  void Scavenge(TypeTag type);
 
   int GetSamplePeriod();
 
@@ -233,6 +233,10 @@ class ThreadCache {
     }
   };
 
+  // Add given type to a linked list of known types. This information
+  // will be used by Scavenge to find all typed free lists.
+  void AddKnownType(TypeTag type);
+
   // Get a free list based on size class and type tag.
   FreeList* GetTypedFreeList (size_t cl, TypeTag type);
 
@@ -242,10 +246,10 @@ class ThreadCache {
 
   // Releases some number of items from src.  Adjusts the list's max_length
   // to eventually converge on num_objects_to_move(cl).
-  void ListTooLong(FreeList* src, size_t cl);
+  void ListTooLong(FreeList* src, size_t cl, TypeTag type);
 
   // Releases N items from this thread cache.
-  void ReleaseToCentralCache(FreeList* src, size_t cl, int N);
+  void ReleaseToCentralCache(FreeList* src, size_t cl, int N, TypeTag type);
 
   // Increase max_size_ by reducing unclaimed_cache_space_ or by
   // reducing the max_size_ of some other thread.  In both cases,
@@ -330,6 +334,13 @@ class ThreadCache {
   Sampler       sampler_;               // A sampler
 
   FreeList      list_[kNumClasses];     // Array indexed by size-class
+
+  struct TypeNode {
+    TypeNode* next;
+    TypeTag   type;
+  };
+
+  TypeNode* known_types;
   PageHeapAllocator<FreeList[kNumClasses]> freelist_array_allocator_;
   typedef MapSelector<kAddressBits>::Type FreeListArrayMap;
   FreeListArrayMap typed_freelist_map_;
@@ -369,6 +380,15 @@ inline bool ThreadCache::SampleAllocation(size_t k) {
 #endif
 }
 
+inline void ThreadCache::AddKnownType(TypeTag type) {
+  TypeNode* next = known_types;
+
+  // TODO(chris): Probably way too slow! Maybe preallocate a few nodes?
+  known_types = (TypeNode*)MetaDataAlloc(sizeof(TypeNode));
+  known_types->next = next;
+  known_types->type = type;
+}
+
 inline ThreadCache::FreeList*
 ThreadCache::GetTypedFreeList (size_t cl, TypeTag type) {
   // Fast path: no type information available.
@@ -390,6 +410,7 @@ ThreadCache::GetTypedFreeList (size_t cl, TypeTag type) {
     }
 
     typed_freelist_map_.set(type, freelist_array);
+    AddKnownType(type);
   } else {
     // Get a free list array based on type.
     freelist_array = reinterpret_cast<FreeList*>(ptr);
@@ -438,9 +459,9 @@ inline void ThreadCache::Deallocate(void* ptr, size_t cl) {
   // because of the bitwise-or trick that follows.
   if (UNLIKELY((list_headroom | size_headroom) < 0)) {
     if (list_headroom < 0) {
-      ListTooLong(list, cl);
+      ListTooLong(list, cl, span->type);
     }
-    if (size_ >= max_size_) Scavenge();
+    if (size_ >= max_size_) Scavenge(span->type);
   }
 }
 
