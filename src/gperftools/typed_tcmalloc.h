@@ -26,8 +26,9 @@
 
 
 #include <stddef.h>                     /* for size_t */
+#include <stdint.h>                     /* for uintptr_t */
 
-typedef unsigned long TypeTag;
+typedef uintptr_t TypeTag;
 
 #ifdef __cplusplus
 extern "C" {
