@@ -86,7 +86,16 @@ class ThreadCache {
   void Cleanup();
 
   // Accessors (mostly just for printing stats)
-  int freelist_length(size_t cl) const { return list_[cl].length(); }
+  int freelist_length(size_t cl, TypeTag type = 0) const {
+    if (UNLIKELY(type)) {
+      void * ptr = typed_freelist_map_.get(type);
+      if (!ptr) return 0;
+
+      return reinterpret_cast<FreeList*>(ptr)->length();
+    } else {
+      return list_[cl].length();
+    }
+  }
 
   // Total byte size in cache
   size_t Size() const { return size_; }
