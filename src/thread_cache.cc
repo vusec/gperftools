@@ -208,16 +208,22 @@ void ThreadCache::ListTooLong(FreeList* list, size_t cl, TypeTag type) {
 // Remove some objects of class "cl" from thread heap and add to central cache
 void ThreadCache::ReleaseToCentralCache(FreeList* src, size_t cl, int N, TypeTag type) {
   ASSERT(src == GetTypedFreeList(cl, type));
+
+  if (type && kPageSize % Static::sizemap()->ByteSizeForClass(cl) != 0) {
+    return;                     // Page size must be a multiple of byte size
+  }
+
   if (N > src->length()) N = src->length();
   size_t delta_bytes = N * Static::sizemap()->ByteSizeForClass(cl);
 
   // We return prepackaged chains of the correct size to the central cache.
   // TODO: Use the same format internally in the thread caches?
   int batch_size = Static::sizemap()->num_objects_to_move(cl);
+
   while (N > batch_size) {
     void *tail, *head;
     src->PopRange(batch_size, &head, &tail);
-    Static::central_cache()[cl].InsertRange(head, tail, batch_size);
+    Static::central_cache(type)[cl].InsertRange(head, tail, batch_size);
     N -= batch_size;
   }
   void *tail, *head;

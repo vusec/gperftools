@@ -230,10 +230,6 @@ bool CentralFreeList::ShrinkCache(int locked_size_class, bool force)
 }
 
 void CentralFreeList::InsertRange(void *start, void *end, int N) {
-  // TODO(chris): If the length of the typed data divides a page, we
-  // can safely give the range back.
-  if (type_) return;
-
   SpinLockHolder h(&lock_);
   if (N == Static::sizemap()->num_objects_to_move(size_class_) &&
     MakeCacheSpace()) {
