@@ -78,21 +78,22 @@ PageHeap::PageHeap()
   }
 }
 
-Span* PageHeap::SearchFreeAndLargeLists(Length n) {
+Span* PageHeap::SearchFreeAndLargeLists(Length n, TypeTag t) {
   ASSERT(Check());
   ASSERT(n > 0);
+  Span* result = NULL;
 
   // Find first size >= n that has a non-empty list
   for (Length s = n; s < kMaxPages; s++) {
     Span* ll = &free_[s].normal;
     // If we're lucky, ll is non-empty, meaning it has a suitable span.
-    if (!DLL_IsEmpty(ll)) {
+    if (ll->type == t && !DLL_IsEmpty(ll)) {
       ASSERT(ll->next->location == Span::ON_NORMAL_FREELIST);
       return Carve(ll->next, n);
     }
     // Alternatively, maybe there's a usable returned span.
     ll = &free_[s].returned;
-    if (!DLL_IsEmpty(ll)) {
+    if (ll->type == t && !DLL_IsEmpty(ll)) {
       // We did not call EnsureLimit before, to avoid releasing the span
       // that will be taken immediately back.
       // Calling EnsureLimit here is not very expensive, as it fails only if
@@ -108,16 +109,16 @@ Span* PageHeap::SearchFreeAndLargeLists(Length n) {
     }
   }
   // No luck in free lists, our last chance is in a larger class.
-  return AllocLarge(n);  // May be NULL
+  return AllocLarge(n, t);  // May be NULL
 }
 
 static const size_t kForcedCoalesceInterval = 128*1024*1024;
 
-Span* PageHeap::New(Length n) {
+Span* PageHeap::New(Length n, TypeTag t) {
   ASSERT(Check());
   ASSERT(n > 0);
 
-  Span* result = SearchFreeAndLargeLists(n);
+  Span* result = SearchFreeAndLargeLists(n, t);
   if (result != NULL)
     return result;
 
@@ -149,12 +150,12 @@ Span* PageHeap::New(Length n) {
     // insufficiently big large spans back to OS. So in case of really
     // unlucky memory fragmentation we'll be consuming virtual address
     // space, but not real memory
-    result = SearchFreeAndLargeLists(n);
+    result = SearchFreeAndLargeLists(n, t);
     if (result != NULL) return result;
   }
 
   // Grow the heap and try again.
-  if (!GrowHeap(n)) {
+  if (!GrowHeap(n, t)) {
     ASSERT(stats_.unmapped_bytes+ stats_.committed_bytes==stats_.system_bytes);
     ASSERT(Check());
     // underlying SysAllocator likely set ENOMEM but we can get here
@@ -165,10 +166,10 @@ Span* PageHeap::New(Length n) {
     errno = ENOMEM;
     return NULL;
   }
-  return SearchFreeAndLargeLists(n);
+  return SearchFreeAndLargeLists(n, t);
 }
 
-Span* PageHeap::AllocLarge(Length n) {
+Span* PageHeap::AllocLarge(Length n, TypeTag t) {
   // find the best span (closest to n in size).
   // The following loops implements address-ordered best-fit.
   Span *best = NULL;
@@ -177,7 +178,7 @@ Span* PageHeap::AllocLarge(Length n) {
   for (Span* span = large_.normal.next;
        span != &large_.normal;
        span = span->next) {
-    if (span->length >= n) {
+    if (span->type == t && span->length >= n) {
       if ((best == NULL)
           || (span->length < best->length)
           || ((span->length == best->length) && (span->start < best->start))) {
@@ -193,7 +194,7 @@ Span* PageHeap::AllocLarge(Length n) {
   for (Span* span = large_.returned.next;
        span != &large_.returned;
        span = span->next) {
-    if (span->length >= n) {
+    if (span->type == t && span->length >= n) {
       if ((best == NULL)
           || (span->length < best->length)
           || ((span->length == best->length) && (span->start < best->start))) {
@@ -217,7 +218,7 @@ Span* PageHeap::AllocLarge(Length n) {
     // best could have been destroyed by coalescing.
     // bestNormal is not a best-fit, and it could be destroyed as well.
     // We retry, the limit is already ensured:
-    return AllocLarge(n);
+    return AllocLarge(n, t);
   }
 
   // If bestNormal existed, EnsureLimit would succeeded:
@@ -594,7 +595,7 @@ static void RecordGrowth(size_t growth) {
   Static::set_growth_stacks(t);
 }
 
-bool PageHeap::GrowHeap(Length n) {
+bool PageHeap::GrowHeap(Length n, TypeTag t) {
   ASSERT(kMaxPages >= kMinSystemAlloc);
   if (n > kMaxValidPages) return false;
   Length ask = (n>kMinSystemAlloc) ? n : static_cast<Length>(kMinSystemAlloc);
