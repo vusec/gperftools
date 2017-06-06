@@ -234,7 +234,7 @@ Span* PageHeap::Split(Span* span, Length n) {
   Event(span, 'T', n);
 
   const int extra = span->length - n;
-  Span* leftover = NewSpan(span->start + n, extra);
+  Span* leftover = NewSpan(span->start + n, extra, span->type);
   ASSERT(leftover->location == Span::IN_USE);
   Event(leftover, 'U', extra);
   RecordSpan(leftover);
@@ -271,7 +271,7 @@ Span* PageHeap::Carve(Span* span, Length n) {
   const int extra = span->length - n;
   ASSERT(extra >= 0);
   if (extra > 0) {
-    Span* leftover = NewSpan(span->start + n, extra);
+    Span* leftover = NewSpan(span->start + n, extra, span->type);
     leftover->location = old_location;
     Event(leftover, 'S', extra);
     RecordSpan(leftover);

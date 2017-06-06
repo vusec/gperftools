@@ -74,7 +74,7 @@ void Event(Span* span, char op, int v = 0);
 #endif
 
 // Allocator/deallocator for spans
-Span* NewSpan(PageID p, Length len);
+Span* NewSpan(PageID p, Length len, TypeTag t = 0);
 void DeleteSpan(Span* span);
 
 // -------------------------------------------------------------------------

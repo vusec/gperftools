@@ -51,11 +51,12 @@ void Event(Span* span, char op, int v = 0) {
 }
 #endif
 
-Span* NewSpan(PageID p, Length len) {
+Span* NewSpan(PageID p, Length len, TypeTag t) {
   Span* result = Static::span_allocator()->New();
   memset(result, 0, sizeof(*result));
   result->start = p;
   result->length = len;
+  result->type = t;
 #ifdef SPAN_HISTORY
   result->nexthistory = 0;
 #endif
