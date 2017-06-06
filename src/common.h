@@ -290,6 +290,54 @@ struct StackTrace {
   void*     stack[kMaxStackDepth];
 };
 
+typedef uintptr_t TypeTag;
+
+template <class T>
+class TypeMap {
+  private:
+  
+    struct node {
+      struct node *next;
+      TypeTag type;
+      T *list;
+    };
+  
+    void *(*allocator_)(size_t);
+    struct node **hashtable_;
+    size_t hashtablesizemask_;
+  public:
+    TypeMap(void *(*allocator)(size_t), int hashtablesizeshift) {
+      allocator_ = allocator;
+      hashtablesizemask_ = (1UL << hashtablesizeshift) - 1;
+      hashtable_ = (struct node **) allocator(sizeof(struct node *) << hashtablesizeshift);
+    }
+    T *get(TypeTag type) const {
+      struct node *node;
+      node = hashtable_[type & hashtablesizemask_];
+      while (node) {
+        if (node->type == type) return node->list;
+	node = node->next;
+      }
+      return NULL;
+    }
+    void set(TypeTag type, T *list) {
+      struct node *node, **node_p;
+      node_p = &hashtable_[type & hashtablesizemask_];
+      while ((node = *node_p)) {
+        if (node->type == type) {
+          node->list = list;
+	  return;
+        }
+	node_p = &node->next;
+      }
+
+      node = *node_p = (struct node *) allocator_(sizeof(struct node));
+      node->next = NULL;
+      node->type = type;
+      node->list = list;
+    }
+};
+
 }  // namespace tcmalloc
 
 #endif  // TCMALLOC_COMMON_H_

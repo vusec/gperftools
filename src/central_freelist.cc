@@ -44,7 +44,9 @@ using std::max;
 
 namespace tcmalloc {
 
-void CentralFreeList::Init(size_t cl) {
+void CentralFreeList::Init(size_t cl, TypeTag type) {
+  if (type) memset(&lock_, 0, sizeof(lock_));
+  type_ = type;
   size_class_ = cl;
   tcmalloc::DLL_Init(&empty_);
   tcmalloc::DLL_Init(&nonempty_);
@@ -149,7 +151,7 @@ void CentralFreeList::ReleaseToSpans(void* object) {
 }
 
 bool CentralFreeList::EvictRandomSizeClass(
-    int locked_size_class, bool force) {
+    int locked_size_class, bool force, TypeTag type) {
   static int race_counter = 0;
   int t = race_counter++;  // Updated without a lock, but who cares.
   if (t >= kNumClasses) {
@@ -161,7 +163,7 @@ bool CentralFreeList::EvictRandomSizeClass(
   ASSERT(t >= 0);
   ASSERT(t < kNumClasses);
   if (t == locked_size_class) return false;
-  return Static::central_cache()[t].ShrinkCache(locked_size_class, force);
+  return Static::central_cache(type)[t].ShrinkCache(locked_size_class, force);
 }
 
 bool CentralFreeList::MakeCacheSpace() {
@@ -170,8 +172,8 @@ bool CentralFreeList::MakeCacheSpace() {
   // Check if we can expand this cache?
   if (cache_size_ == max_cache_size_) return false;
   // Ok, we'll try to grab an entry from some other size class.
-  if (EvictRandomSizeClass(size_class_, false) ||
-      EvictRandomSizeClass(size_class_, true)) {
+  if (EvictRandomSizeClass(size_class_, false, type_) ||
+      EvictRandomSizeClass(size_class_, true, type_)) {
     // Succeeded in evicting, we're going to make our cache larger.
     // However, we may have dropped and re-acquired the lock in
     // EvictRandomSizeClass (via ShrinkCache and the LockInverter), so the
@@ -211,7 +213,7 @@ bool CentralFreeList::ShrinkCache(int locked_size_class, bool force)
   // the lock inverter to ensure that we never hold two size class locks
   // concurrently.  That can create a deadlock because there is no well
   // defined nesting order.
-  LockInverter li(&Static::central_cache()[locked_size_class].lock_, &lock_);
+  LockInverter li(&Static::central_cache(type_)[locked_size_class].lock_, &lock_);
   ASSERT(used_slots_ <= cache_size_);
   ASSERT(0 <= cache_size_);
   if (cache_size_ == 0) return false;

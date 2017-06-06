@@ -77,6 +77,7 @@ PageHeapAllocator<StackTraceTable::Bucket> Static::bucket_allocator_;
 StackTrace* Static::growth_stacks_ = NULL;
 PageHeap* Static::pageheap_ = NULL;
 
+Static::CentralFreeListArrayMap* Static::typed_centralfreelist_map_ = NULL;
 
 void Static::InitStaticVars() {
   sizemap_.Init();
@@ -88,8 +89,11 @@ void Static::InitStaticVars() {
   // Do a bit of sanitizing: make sure central_cache is aligned properly
   CHECK_CONDITION((sizeof(central_cache_[0]) % 64) == 0);
   for (int i = 0; i < kNumClasses; ++i) {
-    central_cache_[i].Init(i);
+    central_cache_[i].Init(i, 0); // Initialize typeless caches
   }
+
+  EnsureTypedCentralCache();
+
 
   // It's important to have PageHeap allocated, not in static storage,
   // so that HeapLeakChecker does not consider all the byte patterns stored
@@ -105,6 +109,35 @@ void Static::InitStaticVars() {
 
   DLL_Init(&sampled_objects_);
   Sampler::InitStatics();
+}
+
+void Static::EnsureTypedCentralCache() {
+  if (UNLIKELY(!typed_centralfreelist_map_)) {
+    typed_centralfreelist_map_ =
+      new (MetaDataAlloc(sizeof(CentralFreeListArrayMap)))
+      CentralFreeListArrayMap(MetaDataAlloc, 12);
+  }
+}
+
+CentralFreeListPadded* Static::central_cache(TypeTag type) {
+  if (UNLIKELY(type)) {
+    void * ptr = Static::typed_centralfreelist_map_->get(type);
+
+    if (UNLIKELY(!ptr)) {
+      ptr = MetaDataAlloc(sizeof(CentralFreeListPadded) * kNumClasses);
+
+      for (size_t i = 0; i < kNumClasses; ++i) {
+        static_cast<CentralFreeListPadded*>(ptr)[i].Init(i, type);
+      }
+
+      // typed_centralfreelist_map_->set((PageID)123, (void*)0x123456);
+      typed_centralfreelist_map_->set((PageID)type, (void*)ptr);
+    }
+
+    return static_cast<CentralFreeListPadded*>(ptr);
+  } else {
+    return central_cache_;
+  }
 }
 
 

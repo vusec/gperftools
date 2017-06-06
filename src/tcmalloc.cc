@@ -89,6 +89,7 @@
 
 #include "config.h"
 #include <gperftools/tcmalloc.h>
+#include <gperftools/typed_tcmalloc.h> // for TypeTag.
 
 #include <errno.h>                      // for ENOMEM, EINVAL, errno
 #if defined HAVE_STDINT_H
@@ -1149,7 +1150,8 @@ inline bool should_report_large(Length num_pages) {
 }
 
 // Helper for do_malloc().
-inline void* do_malloc_pages(ThreadCache* heap, size_t size) {
+// TODO(chris): Implement for do_malloc_pages (central free list stuff)
+inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
   void* result;
   bool report_large;
 
@@ -1161,7 +1163,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size) {
   // from possibility of overflow, which rounding up could produce.
   //
   // See https://github.com/gperftools/gperftools/issues/723
-  if (heap->SampleAllocation(size)) {
+  if (UNLIKELY(!type && heap->SampleAllocation(size))) {
     result = DoSampledAllocation(size);
 
     SpinLockHolder h(Static::pageheap_lock());
@@ -1179,44 +1181,49 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size) {
   return result;
 }
 
-ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size) {
+ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type = 0) {
   ASSERT(Static::IsInited());
   ASSERT(heap != NULL);
   size_t cl = Static::sizemap()->SizeClass(size);
   size = Static::sizemap()->class_to_size(cl);
 
-  if (UNLIKELY(heap->SampleAllocation(size))) {
+  // TODO(chris): Implement types for Sampled Allocations
+  if (UNLIKELY(!type && heap->SampleAllocation(size))) {
     return DoSampledAllocation(size);
   } else {
     // The common case, and also the simplest.  This just pops the
     // size-appropriate freelist, after replenishing it if it's empty.
-    return CheckedMallocResult(heap->Allocate(size, cl));
+    return CheckedMallocResult(heap->Allocate(size, cl, type));
   }
 }
 
-ALWAYS_INLINE void* do_malloc(size_t size) {
+ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type = 0) {
   if (ThreadCache::have_tls) {
     if (LIKELY(size < ThreadCache::MinSizeForSlowPath())) {
-      return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size);
+      return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size, type);
     }
     if (UNLIKELY(ThreadCache::IsUseEmergencyMalloc())) {
-      return tcmalloc::EmergencyMalloc(size);
+      return tcmalloc::EmergencyMalloc(size); // TODO(chris): implement for EmergencyMalloc
     }
   }
 
   if (size <= kMaxSize) {
-    return do_malloc_small(ThreadCache::GetCache(), size);
+    return do_malloc_small(ThreadCache::GetCache(), size, type);
   } else {
-    return do_malloc_pages(ThreadCache::GetCache(), size);
+    return do_malloc_pages(ThreadCache::GetCache(), size, type);
   }
+}
+
+ALWAYS_INLINE void* do_malloc(size_t size) {
+  return do_typed_malloc(size, 0);
 }
 
 static void *retry_malloc(void* size) {
   return do_malloc(reinterpret_cast<size_t>(size));
 }
 
-ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size) {
-  void *rv = do_malloc(size);
+ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size, TypeTag type = 0) {
+  void *rv = do_typed_malloc(size, type);
   if (LIKELY(rv != NULL)) {
     return rv;
   }
@@ -1224,16 +1231,20 @@ ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size) {
                     false, true);
 }
 
-ALWAYS_INLINE void* do_calloc(size_t n, size_t elem_size) {
+ALWAYS_INLINE void* do_typed_calloc(size_t n, size_t elem_size, TypeTag type) {
   // Overflow check
   const size_t size = n * elem_size;
   if (elem_size != 0 && size / elem_size != n) return NULL;
 
-  void* result = do_malloc_or_cpp_alloc(size);
+  void* result = do_malloc_or_cpp_alloc(size, type);
   if (result != NULL) {
     memset(result, 0, size);
   }
   return result;
+}
+
+ALWAYS_INLINE void* do_calloc(size_t n, size_t elem_size) {
+  return do_typed_calloc(n, elem_size, 0);
 }
 
 // If ptr is NULL, do nothing.  Otherwise invoke the given function.
@@ -1300,13 +1311,14 @@ ALWAYS_INLINE void do_free_helper(void* ptr,
   ASSERT(ptr != NULL);
   if (LIKELY(cl != 0)) {
   non_zero:
-    ASSERT(!Static::pageheap()->GetDescriptor(p)->sample);
+    span = Static::pageheap()->GetDescriptor(p);
+    ASSERT(!span->sample);
     if (heap_must_be_valid || heap != NULL) {
       heap->Deallocate(ptr, cl);
     } else {
       // Delete directly into central cache
       tcmalloc::SLL_SetNext(ptr, NULL);
-      Static::central_cache()[cl].InsertRange(ptr, ptr, 1);
+      Static::central_cache(span->type)[cl].InsertRange(ptr, ptr, 1);
     }
   } else {
     SpinLockHolder h(Static::pageheap_lock());
@@ -1373,7 +1385,8 @@ inline size_t GetSizeWithCallback(const void* ptr,
 ALWAYS_INLINE void* do_realloc_with_callback(
     void* old_ptr, size_t new_size,
     void (*invalid_free_fn)(void*),
-    size_t (*invalid_get_size_fn)(const void*)) {
+    size_t (*invalid_get_size_fn)(const void*),
+    TypeTag type) {
   // Get the size of the old entry
   const size_t old_size = GetSizeWithCallback(old_ptr, invalid_get_size_fn);
 
@@ -1390,11 +1403,11 @@ ALWAYS_INLINE void* do_realloc_with_callback(
     void* new_ptr = NULL;
 
     if (new_size > old_size && new_size < lower_bound_to_grow) {
-      new_ptr = do_malloc_or_cpp_alloc(lower_bound_to_grow);
+      new_ptr = do_malloc_or_cpp_alloc(lower_bound_to_grow, type);
     }
     if (new_ptr == NULL) {
       // Either new_size is not a tiny increment, or last do_malloc failed.
-      new_ptr = do_malloc_or_cpp_alloc(new_size);
+      new_ptr = do_malloc_or_cpp_alloc(new_size, type);
     }
     if (UNLIKELY(new_ptr == NULL)) {
       return NULL;
@@ -1415,9 +1428,14 @@ ALWAYS_INLINE void* do_realloc_with_callback(
   }
 }
 
-ALWAYS_INLINE void* do_realloc(void* old_ptr, size_t new_size) {
+ALWAYS_INLINE void* do_typed_realloc(void* old_ptr, size_t new_size, TypeTag type) {
   return do_realloc_with_callback(old_ptr, new_size,
-                                  &InvalidFree, &InvalidGetSizeForRealloc);
+                                  &InvalidFree, &InvalidGetSizeForRealloc,
+				  type);
+}
+
+ALWAYS_INLINE void* do_realloc(void* old_ptr, size_t new_size) {
+  return do_typed_realloc(old_ptr, new_size, 0);
 }
 
 // For use by exported routines below that want specific alignments
@@ -1539,13 +1557,17 @@ inline struct mallinfo do_mallinfo() {
 }
 #endif  // HAVE_STRUCT_MALLINFO
 
-inline void* cpp_alloc(size_t size, bool nothrow) {
-  void* p = do_malloc(size);
+inline void* cpp_typed_alloc(size_t size, bool nothrow, TypeTag type) {
+  void* p = do_typed_malloc(size, type);
   if (LIKELY(p)) {
     return p;
   }
   return handle_oom(retry_malloc, reinterpret_cast<void *>(size),
                     true, nothrow);
+}
+
+inline void* cpp_alloc(size_t size, bool nothrow) {
+  return cpp_typed_alloc(size, nothrow, 0);
 }
 
 }  // end unnamed namespace
@@ -1594,6 +1616,16 @@ extern "C" PERFTOOLS_DLL_DECL int tc_set_new_mode(int flag) PERFTOOLS_THROW {
 #define TC_ALIAS(name) __attribute__((alias(#name)))
 #endif
 
+
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_malloc(size_t size, TypeTag type)
+  PERFTOOLS_THROW {
+  void* result = do_malloc_or_cpp_alloc(size, type);
+
+  MallocHook::InvokeNewHook(result, size);
+  return result;
+}
+
+
 // CAVEAT: The code structure below ensures that MallocHook methods are always
 //         called from the stack frame of the invoked allocation function.
 //         heap-checker.cc depends on this to start a stack trace from
@@ -1637,6 +1669,18 @@ extern "C" PERFTOOLS_DLL_DECL void tc_deletearray_sized(void *p, size_t size) th
 
 #endif
 
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_calloc(size_t n,
+                                                    size_t elem_size,
+						    TypeTag type)
+						    PERFTOOLS_THROW {
+  if (ThreadCache::IsUseEmergencyMalloc()) {
+    return tcmalloc::EmergencyCalloc(n, elem_size);
+  }
+  void* result = do_typed_calloc(n, elem_size, type);
+  MallocHook::InvokeNewHook(result, n * elem_size);
+  return result;
+}
+
 extern "C" PERFTOOLS_DLL_DECL void* tc_calloc(size_t n,
                                               size_t elem_size) PERFTOOLS_THROW {
   if (ThreadCache::IsUseEmergencyMalloc()) {
@@ -1657,6 +1701,26 @@ TC_ALIAS(tc_free);
 }
 #endif
 
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_realloc(void* old_ptr,
+                                                     size_t new_size,
+						     TypeTag type)
+						     PERFTOOLS_THROW {
+  if (old_ptr == NULL) {
+    void* result = do_malloc_or_cpp_alloc(new_size, type);
+    MallocHook::InvokeNewHook(result, new_size);
+    return result;
+  }
+  if (new_size == 0) {
+    MallocHook::InvokeDeleteHook(old_ptr);
+    do_free(old_ptr);
+    return NULL;
+  }
+  if (UNLIKELY(tcmalloc::IsEmergencyPtr(old_ptr))) {
+    return tcmalloc::EmergencyRealloc(old_ptr, new_size);
+  }
+  return do_typed_realloc(old_ptr, new_size, type);
+}
+
 extern "C" PERFTOOLS_DLL_DECL void* tc_realloc(void* old_ptr,
                                                size_t new_size) PERFTOOLS_THROW {
   if (old_ptr == NULL) {
@@ -1673,6 +1737,17 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_realloc(void* old_ptr,
     return tcmalloc::EmergencyRealloc(old_ptr, new_size);
   }
   return do_realloc(old_ptr, new_size);
+}
+
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_new(size_t size, TypeTag type) {
+  void* p = cpp_typed_alloc(size, false, type);
+  // We keep this next instruction out of cpp_alloc for a reason: when
+  // it's in, and new just calls cpp_alloc, the optimizer may fold the
+  // new call into cpp_alloc, which messes up our whole section-based
+  // stacktracing (see ATTRIBUTE_SECTION, above).  This ensures cpp_alloc
+  // isn't the last thing this fn calls, and prevents the folding.
+  MallocHook::InvokeNewHook(p, size);
+  return p;
 }
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_new(size_t size) {
