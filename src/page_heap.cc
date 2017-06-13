@@ -35,6 +35,9 @@
 #ifdef HAVE_INTTYPES_H
 #include <inttypes.h>                   // for PRIuPTR
 #endif
+#include <string.h>
+#include <sys/mman.h>                    // for mmap
+#include <stdio.h>                       // for file IO functions
 #include <errno.h>                      // for ENOMEM, errno
 #include <gperftools/malloc_extension.h>      // for MallocRange, etc
 #include "base/basictypes.h"
@@ -65,6 +68,7 @@ namespace tcmalloc {
 PageHeap::PageHeap()
     : pagemap_(MetaDataAlloc),
       pagemap_cache_(0),
+      area_counter_(0),
       scavenge_counter_(0),
       // Start scavenging at kMaxPages list
       release_index_(kMaxPages),
@@ -81,7 +85,6 @@ PageHeap::PageHeap()
 Span* PageHeap::SearchFreeAndLargeLists(Length n, TypeTag t) {
   ASSERT(Check());
   ASSERT(n > 0);
-  Span* result = NULL;
 
   // Find first size >= n that has a non-empty list
   for (Length s = n; s < kMaxPages; s++) {
@@ -322,10 +325,12 @@ void PageHeap::Delete(Span* span) {
 }
 
 bool PageHeap::MayMergeSpans(Span *span, Span *other) {
-  if (aggressive_decommit_) {
-    return other->location != Span::IN_USE;
-  }
-  return span->location == other->location;
+  // Disable merging
+  return false;
+  // if (aggressive_decommit_) {
+  //   return other->location != Span::IN_USE;
+  // }
+  // return span->location == other->location;
 }
 
 void PageHeap::MergeIntoFreeList(Span* span) {
@@ -595,26 +600,98 @@ static void RecordGrowth(size_t growth) {
   Static::set_growth_stacks(t);
 }
 
+size_t PageHeap::ParseMaps(AreaRange ranges[], size_t length) {
+  size_t i;
+  char line[BUFSIZ];
+  FILE* f = NULL;
+
+  if ((f = fopen("/proc/self/maps", "r"))) {
+    Log(kCrash, __FILE__, __LINE__,
+        "ParseMaps:", strerror(errno));
+  }
+
+  for (i = 0; fgets(line, BUFSIZ, f) && i < length; i++) {
+    sscanf(line, "%016lx-%016lx", &ranges[i].start, &ranges[i].end);
+  }
+
+  fclose(f);
+
+  if (i >= length) {
+    Log(kCrash, __FILE__, __LINE__,
+        "ParseMaps: not enough room to store entries from /proc/self/maps.");
+  }
+
+  return i;
+}
+
+void *PageHeap::FindUsableArea() {
+  static uint16_t counter = 0;
+  uint16_t old_counter = counter;
+  size_t shift = kFixedSpanShift + 1;
+  AreaRange range;
+  AreaRange ranges[kMapsBufferSize];
+  size_t range_count = ParseMaps(ranges, kMapsBufferSize);
+
+  // We want a spot in memory where we can reserve two areas. The
+  // first will be used, the other will be a redzone.
+  range.start = (long)counter       << shift;
+  range.end   = (long)(counter + 1) << shift;
+
+  for (size_t i = 0; i < range_count; i++) {
+    // Check if two ranges overlap
+    if ((range.start <= ranges[i].start && ranges[i].start < range.end) ||
+        (ranges[i].start <= range.start && range.start < ranges[i].end)) {
+      // If the ranges overlap, increase counter and try again.
+      range.start = (long)++counter << 33;
+      range.end   = (long)(counter + 1) << 33;
+    } else if (range.end <= ranges[i].start) {
+      // If the ranges do not overlap and is before the current range
+      // from maps, stop. This hole should be big enough.
+      break;
+    } else {
+      /* If range is usable, check next range from map */
+      // printf("Range %p-%p might be usable...\n",
+      //        (void*)range.start, (void*)range.end);
+    }
+
+    if (counter < old_counter) {
+      Log(kCrash, __FILE__, __LINE__,
+          "FindUsableArea: counter wrapped around!");
+    }
+  }
+
+  // printf("Range %p-%p usable!!!\n", (void*)range.start, (void*)range.end);
+  return (void*)range.start;
+}
+
+void *PageHeap::AreaAlloc() {
+  void* start = (void*)(500l<<(kFixedSpanShift)); //FindUsableArea();
+  void* ptr = mmap(start, 1l << kFixedSpanShift, //1l << (kFixedSpanShift + 1),
+                   PROT_READ | PROT_WRITE,
+                   MAP_NORESERVE | MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+  if (ptr == MAP_FAILED) {
+    Log(kLog, __FILE__, __LINE__,
+        "AreaAlloc:", strerror(errno));
+    return NULL;
+  }
+
+  // Emulate TCMalloc_SystemAlloc observable behavior
+  // TODO: report only span size or span size + redzone size?
+  TCMalloc_SystemTaken += 1l << (kFixedSpanShift);
+
+  return ptr;
+}
+
 bool PageHeap::GrowHeap(Length n, TypeTag t) {
   ASSERT(kMaxPages >= kMinSystemAlloc);
   if (n > kMaxValidPages) return false;
-  Length ask = (n>kMinSystemAlloc) ? n : static_cast<Length>(kMinSystemAlloc);
-  size_t actual_size;
-  void* ptr = NULL;
-  if (EnsureLimit(ask)) {
-      ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
-  }
-  if (ptr == NULL) {
-    if (n < ask) {
-      // Try growing just "n" pages
-      ask = n;
-      if (EnsureLimit(ask)) {
-        ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
-      }
-    }
-    if (ptr == NULL) return false;
-  }
-  ask = actual_size >> kPageShift;
+
+  Length ask = 1 << (kFixedSpanShift - kPageShift);
+  void* ptr = AreaAlloc();
+
+  if (ptr == NULL) return false;
+
   RecordGrowth(ask << kPageShift);
 
   uint64_t old_system_bytes = stats_.system_bytes;
@@ -638,13 +715,15 @@ bool PageHeap::GrowHeap(Length n, TypeTag t) {
   if (pagemap_.Ensure(p-1, ask+2)) {
     // Pretend the new area is allocated and then Delete() it to cause
     // any necessary coalescing to occur.
-    Span* span = NewSpan(p, ask);
+    Span* span = NewSpan(p, ask, t);
     RecordSpan(span);
     Delete(span);
     ASSERT(stats_.unmapped_bytes+ stats_.committed_bytes==stats_.system_bytes);
     ASSERT(Check());
     return true;
   } else {
+    Log(kLog, __FILE__, __LINE__,
+        "GROWHEAP: ENSURE failed", ask << kPageShift);
     // We could not allocate memory within "pagemap_"
     // TODO: Once we can return memory to the system, return the new span
     return false;
