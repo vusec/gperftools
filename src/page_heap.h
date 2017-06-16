@@ -93,11 +93,6 @@ template <> class MapSelector<32> {
   typedef PackedCache<32-kPageShift, uint16_t> CacheType;
 };
 
-typedef struct AreaRange {
-  uintptr_t start;
-  uintptr_t end;
-} AreaRange;
-
 // -------------------------------------------------------------------------
 // Page-level allocator
 //  * Eager coalescing
@@ -225,25 +220,11 @@ class PERFTOOLS_DLL_DECL PageHeap {
   // scavenging again.  With 4K pages, this comes to 1GB of memory.
   static const int kDefaultReleaseDelay = 1 << 18;
 
-  // Allocate fixed sized spans when we grow the heap. We use 4GB
-  // slabs per span. This allows us for simple pointer arithmetic to
-  // prevent pointer to escape a span.
-  static const size_t kFixedSpanShift = 32;
-
-  // Amount of AreaRanges to reserve while reading /proc/self/maps.
-  static const size_t kMapsBufferSize = 1 << 11;
-
   // Pick the appropriate map and cache types based on pointer size
   typedef MapSelector<kAddressBits>::Type PageMap;
   typedef MapSelector<kAddressBits>::CacheType PageMapCache;
   PageMap pagemap_;
   mutable PageMapCache pagemap_cache_;
-
-  // We use kFixedSpanSize sized areas. Each area is followed by a gap
-  // of equal size. This counter keeps track of the areas we have seen
-  // before. Each time an area is allocated or skipped (for the gap or
-  // if the area can not be allocated), this counter is incremented.
-  uint16_t area_counter_;
 
   // We segregate spans of a given size into two circular linked
   // lists: one for normal spans, and one for spans whose memory
@@ -285,19 +266,6 @@ class PERFTOOLS_DLL_DECL PageHeap {
   // Allocate a large span of length == n.  If successful, returns a
   // span of exactly the specified length.  Else, returns NULL.
   Span* AllocLarge(Length n, TypeTag t = 0);
-
-  // Parse /proc/self/maps, filling ranges and returning the number of
-  // mappings found. Length helps to prevent overflow of ranges.
-  size_t ParseMaps(AreaRange ranges[], size_t length);
-
-  // Mmap does not fail when we try to allocate an area that is
-  // already in use. Therefore, we need a method to find an area in
-  // the virtual address space that is not mapped yet. Using ParseMaps
-  // we can determine whether a range can be mmap'ed or not.
-  void* FindUsableArea();
-
-  // Allocate a large single area with padding.
-  void* AreaAlloc();
 
   // Coalesce span with neighboring spans if possible, prepend to
   // appropriate free list, and adjust stats.

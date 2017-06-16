@@ -133,6 +133,14 @@ static const int kMaxDynamicFreeListLength = 8192;
 
 static const Length kMaxValidPages = (~static_cast<Length>(0)) >> kPageShift;
 
+// Allocate fixed sized spans when we grow the heap. We use 4GB slabs
+// per span. This allows us for simple pointer arithmetic to prevent
+// pointer to escape a span.
+static const size_t kFixedSpanShift = 32;
+
+// Amount of AreaRanges to reserve while reading /proc/self/maps.
+static const size_t kMapsBufferSize = 1 << 11;
+
 #if defined __x86_64__
 // All current and planned x86_64 processors only look at the lower 48 bits
 // in virtual to physical address translation.  The top 16 are thus unused.

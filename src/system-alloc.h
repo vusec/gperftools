@@ -62,6 +62,10 @@ extern PERFTOOLS_DLL_DECL
 void* TCMalloc_SystemAlloc(size_t bytes, size_t *actual_bytes,
 			   size_t alignment = 0);
 
+// Allocate a large single area with padding.
+extern PERFTOOLS_DLL_DECL
+void* AreaAlloc();
+
 // This call is a hint to the operating system that the pages
 // contained in the specified range of memory will not be used for a
 // while, and can be released for use by other processes or the OS.
