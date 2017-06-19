@@ -33,7 +33,6 @@
 
 #include <config.h>
 #include <errno.h>                      // for EAGAIN, errno
-#include <stdio.h>                      // for perror, BUFSIZ
 #include <fcntl.h>                      // for open, O_RDWR
 #include <stddef.h>                     // for size_t, NULL, ptrdiff_t
 #if defined HAVE_STDINT_H
@@ -51,6 +50,7 @@
 #endif
 #include <new>                          // for operator new
 #include <gperftools/malloc_extension.h>
+#include "base/sysinfo.h"               // for ProcMapsIterator
 #include "base/basictypes.h"
 #include "base/commandlineflags.h"
 #include "base/spinlock.h"              // for SpinLockHolder, SpinLock, etc
@@ -290,9 +290,9 @@ void* MmapSysAllocator::Alloc(size_t size, size_t *actual_size,
   // that this code runs for a while before the flags are initialized.
   // Chances are we never get here before the flags are initialized since
   // sbrk is used until the heap is exhausted (before mmap is used).
-  if (FLAGS_malloc_skip_mmap) {
-    return NULL;
-  }
+  // if (FLAGS_malloc_skip_mmap) {
+  //   return NULL;
+  // }
 
   // Enforce page alignment
   if (pagesize == 0) pagesize = getpagesize();
@@ -321,7 +321,7 @@ void* MmapSysAllocator::Alloc(size_t size, size_t *actual_size,
   // therefore  size + extra < (1<<NBITS)
   void* result = mmap(NULL, size + extra,
                       PROT_READ|PROT_WRITE,
-                      MAP_PRIVATE|MAP_ANONYMOUS,
+                      MAP_NORESERVE|MAP_PRIVATE|MAP_ANONYMOUS,
                       -1, 0);
   if (result == reinterpret_cast<void*>(MAP_FAILED)) {
     return NULL;
@@ -485,121 +485,14 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-// Parse /proc/self/maps, filling ranges and returning the number of
-// mappings found. Length helps to prevent overflow of ranges.
-size_t ParseMaps(AreaRange ranges[], size_t size) {
-  char buffer[BUFSIZ], *line, *old_line;
-  size_t index = 0, offset = 0;
-  int fd = open("/proc/self/maps", O_RDONLY), bytes_read;
-
-  if (fd == -1) {
-    perror("Error in ParseMaps");
-    abort();
-  }
-
-  while ((bytes_read = read(fd, buffer + offset, BUFSIZ - offset - 1)) != EOF &&
-         bytes_read != 0) {
-    buffer[bytes_read + offset] = '\0';
-    line = buffer;
-
-    do {
-      old_line = line;
-
-      /* If newline character is found, replace it with a \0 and scan
-         for memory ranges in this line. Finally, update line pointer
-         and  index. If no newline is found, break from this loop. */
-      if ((line = strchr(line, '\n'))) {
-
-        *line = '\0';
-        /* Scan for range and update line pointer and index */
-        sscanf(old_line, "%016lx-%016lx",
-               &ranges[index].start,
-               &ranges[index].end);
-        line++; index++;
-        /* printf("%s\n", old_line); */
-      } else {
-        break;
-      }
-    } while (1);
-
-    /* Set offset to the length of the last read part, then copy the
-       part to the beginning of the buffer and loop back to read more
-       input to scan. */
-    offset = strlen(old_line);
-    strcpy(buffer, old_line);
-  }
-
-  close(fd);
-
-  if (offset > 0) {
-    sscanf(old_line, "%016lx-%016lx",
-           &ranges[index].start,
-           &ranges[index].end);
-    index++;
-  }
-
-  if (index >= size) {
-    Log(tcmalloc::kCrash, __FILE__, __LINE__,
-        "ParseMaps: not enough room to store entries from /proc/self/maps.");
-  }
-
-  return index;
-}
-
-// Mmap does not fail when we try to allocate an area that is
-// already in use. Therefore, we need a method to find an area in
-// the virtual address space that is not mapped yet. Using ParseMaps
-// we can determine whether a range can be mmap'ed or not.
-void *FindUsableArea() {
-  static uint16_t counter = 0;
-  uint16_t old_counter = counter;
-  size_t shift = kFixedSpanShift + 1;
-  AreaRange range;
-  AreaRange ranges[kMapsBufferSize];
-  size_t range_count = ParseMaps(ranges, kMapsBufferSize);
-
-  // We want a spot in memory where we can reserve two areas. The
-  // first will be used, the other will be a redzone.
-  range.start = (long)counter       << shift;
-  range.end   = (long)(counter + 1) << shift;
-
-  for (size_t i = 0; i < range_count; i++) {
-    // Check if two ranges overlap
-    if ((range.start <= ranges[i].start && ranges[i].start < range.end) ||
-        (ranges[i].start <= range.start && range.start < ranges[i].end)) {
-      // If the ranges overlap, increase counter and try again.
-      range.start = (long)++counter << 33;
-      range.end   = (long)(counter + 1) << 33;
-    } else if (range.end <= ranges[i].start) {
-      // If the ranges do not overlap and is before the current range
-      // from maps, stop. This hole should be big enough.
-      break;
-    } else {
-      /* If range is usable, check next range from map */
-      // printf("Range %p-%p might be usable...\n",
-      //        (void*)range.start, (void*)range.end);
-    }
-
-    if (counter < old_counter) {
-      Log(tcmalloc::kCrash, __FILE__, __LINE__,
-          "FindUsableArea: counter wrapped around!");
-    }
-  }
-
-  Log(kLog, __FILE__, __LINE__,
-      "FindUsableArea: Found range", range.start, "till", range.end);
-
-  return (void*)range.start;
-}
-
 void *AreaAlloc() {
-  void* start = FindUsableArea();
-  // void* start = (void*)(500l<<(kFixedSpanShift));
+  static MmapSysAllocator *mmap_alloc = new (mmap_space.buf) MmapSysAllocator();
 
-  SpinLockHolder lock_holder(&spinlock); //TODO: do we need this?
-  void* ptr = mmap(start, 1l << kFixedSpanShift, //1l << (kFixedSpanShift + 1),
-                   PROT_READ | PROT_WRITE,
-                   MAP_NORESERVE | MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  SpinLockHolder lock_holder(&spinlock);
+  size_t actual_size;
+  void* ptr = mmap_alloc->Alloc(1l << kFixedSpanShift,
+                                &actual_size,
+                                1l << kFixedSpanShift);
 
   if (ptr == MAP_FAILED) {
     Log(kLog, __FILE__, __LINE__,
@@ -607,6 +500,9 @@ void *AreaAlloc() {
     return NULL;
   }
 
+  ASSERT(actual_size == (1l << kFixedSpanShift));
+  Log(kLog, __FILE__, __LINE__,
+        "AreaAlloc: Successfully allocated mem", actual_size);
   // Emulate TCMalloc_SystemAlloc observable behavior
   TCMalloc_SystemTaken += 1l << kFixedSpanShift;
 
