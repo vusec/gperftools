@@ -61,9 +61,9 @@ void SetTestResourceLimit() {
 #define USE_RESOURCE RLIMIT_RSS
 #endif
 
-  // Restrict the test to 1GiB, which should fit comfortably well on both
+  // Restrict the test to 1TiB, which should fit comfortably well on both
   // 32-bit and 64-bit hosts, and executes in ~1s.
-  const rlim_t kMaxMem = 1<<30;
+  const rlim_t kMaxMem = 1<<40;
 
   struct rlimit rlim;
   if (getrlimit(USE_RESOURCE, &rlim) == 0) {
