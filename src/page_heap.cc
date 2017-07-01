@@ -609,14 +609,13 @@ static void RecordGrowth(size_t growth) {
 
 bool PageHeap::GrowHeap(Length n, TypeTag t) {
   ASSERT(kMaxPages >= kMinSystemAlloc);
-  if (n > kMaxValidPages) return false;
-
   Length ask = 1 << (kFixedSpanShift - kPageShift);
+  if (n > kMaxValidPages || n > ask) return false;
+
   void* ptr = AreaAlloc();
 
   Log(kLog, __FILE__, __LINE__,
       "GROWHEAP: ", ptr);
-
 
   if (ptr == NULL) return false;
 
