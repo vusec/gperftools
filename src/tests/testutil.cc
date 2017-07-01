@@ -50,6 +50,7 @@
 // limiting the address-space size we get sufficient coverage without blowing
 // out job limits.
 void SetTestResourceLimit() {
+#if 0 /* Disable resource limiting */
 #ifdef HAVE_SYS_RESOURCE_H
   // The actual resource we need to set varies depending on which flavour of
   // unix.  On Linux we need RLIMIT_AS because that covers the use of mmap.
@@ -61,9 +62,9 @@ void SetTestResourceLimit() {
 #define USE_RESOURCE RLIMIT_RSS
 #endif
 
-  // Restrict the test to 1TiB, which should fit comfortably well on both
+  // Restrict the test to 1GiB, which should fit comfortably well on both
   // 32-bit and 64-bit hosts, and executes in ~1s.
-  const rlim_t kMaxMem = 1<<40;
+  const rlim_t kMaxMem = 1<<30;
 
   struct rlimit rlim;
   if (getrlimit(USE_RESOURCE, &rlim) == 0) {
@@ -73,6 +74,7 @@ void SetTestResourceLimit() {
     }
   }
 #endif  /* HAVE_SYS_RESOURCE_H */
+#endif  /* Disable resource limiting */
 }
 
 
