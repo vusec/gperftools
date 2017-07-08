@@ -86,8 +86,6 @@ PageHeap::PageHeap()
 Span* PageHeap::SearchFreeAndLargeLists(Length n, TypeTag t) {
   ASSERT(Check());
   ASSERT(n > 0);
-  Log(kLog, __FILE__, __LINE__,
-      "SearchFreeAndLargeLists: ", n, t);
 
   // Find first size >= n that has a non-empty list
   for (Length s = n; s < kMaxPages; s++) {
@@ -177,9 +175,6 @@ Span* PageHeap::New(Length n, TypeTag t) {
 }
 
 Span* PageHeap::AllocLarge(Length n, TypeTag t) {
-  Log(kLog, __FILE__, __LINE__,
-      "AllocLarge: ", n, t);
-
   // find the best span (closest to n in size).
   // The following loops implements address-ordered best-fit.
   Span *best = NULL;
@@ -613,9 +608,6 @@ bool PageHeap::GrowHeap(Length n, TypeTag t) {
   if (n > kMaxValidPages || n > ask) return false;
 
   void* ptr = AreaAlloc();
-
-  Log(kLog, __FILE__, __LINE__,
-      "GROWHEAP: ", ptr);
 
   if (ptr == NULL) return false;
 
