@@ -988,7 +988,7 @@ static inline void* SpanToMallocResult(Span *span) {
       CheckedMallocResult(reinterpret_cast<void*>(span->start << kPageShift));
 }
 
-static void* DoSampledAllocation(size_t size) {
+static void* DoSampledAllocation(size_t size, TypeTag type) {
 #ifndef NO_TCMALLOC_SAMPLES
   // Grab the stack trace outside the heap lock
   StackTrace tmp;
@@ -997,7 +997,7 @@ static void* DoSampledAllocation(size_t size) {
 
   SpinLockHolder h(Static::pageheap_lock());
   // Allocate span
-  Span *span = Static::pageheap()->New(tcmalloc::pages(size == 0 ? 1 : size));
+  Span *span = Static::pageheap()->New(tcmalloc::pages(size == 0 ? 1 : size), type);
   if (UNLIKELY(span == NULL)) {
     return NULL;
   }
@@ -1166,7 +1166,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
   //
   // See https://github.com/gperftools/gperftools/issues/723
   if (UNLIKELY(!type && heap->SampleAllocation(size))) {
-    result = DoSampledAllocation(size);
+    result = DoSampledAllocation(size, type);
 
     SpinLockHolder h(Static::pageheap_lock());
     report_large = should_report_large(num_pages);
@@ -1191,7 +1191,7 @@ ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type
 
   // TODO(chris): Implement types for Sampled Allocations
   if (UNLIKELY(!type && heap->SampleAllocation(size))) {
-    return DoSampledAllocation(size);
+    return DoSampledAllocation(size, type);
   } else {
     // The common case, and also the simplest.  This just pops the
     // size-appropriate freelist, after replenishing it if it's empty.
