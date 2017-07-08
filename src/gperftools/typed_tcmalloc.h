@@ -36,6 +36,12 @@ extern "C" {
 
 /* Typed allocation function declarations. */
 PERFTOOLS_DLL_DECL void* tc_typed_malloc(size_t size, TypeTag type) PERFTOOLS_THROW;
+PERFTOOLS_DLL_DECL void* tc_typed_calloc(size_t n, size_t elem_size, TypeTag type) PERFTOOLS_THROW;
+PERFTOOLS_DLL_DECL void* tc_typed_realloc(void* old_ptr, size_t new_size, TypeTag type) PERFTOOLS_THROW;
+PERFTOOLS_DLL_DECL void* tc_typed_new(size_t size, TypeTag type);
+PERFTOOLS_DLL_DECL void* tc_typed_memalign(size_t align, size_t size, TypeTag type) PERFTOOLS_THROW;
+PERFTOOLS_DLL_DECL void* tc_typed_valloc(size_t size, TypeTag type) PERFTOOLS_THROW;
+PERFTOOLS_DLL_DECL void* tc_typed_pvalloc(size_t size, TypeTag type) PERFTOOLS_THROW;
 
 #ifdef __cplusplus
 }

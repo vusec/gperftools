@@ -1108,32 +1108,34 @@ static void ReportLargeAlloc(Length num_pages, void* result) {
   write(STDERR_FILENO, buffer, strlen(buffer));
 }
 
-void* do_memalign(size_t align, size_t size);
+void* do_memalign(size_t align, size_t size, TypeTag type);
 
 struct retry_memaligh_data {
   size_t align;
   size_t size;
+  TypeTag type;
 };
 
 static void *retry_do_memalign(void *arg) {
   retry_memaligh_data *data = static_cast<retry_memaligh_data *>(arg);
-  return do_memalign(data->align, data->size);
+  return do_memalign(data->align, data->size, data->type);
 }
 
-static void *maybe_do_cpp_memalign_slow(size_t align, size_t size) {
+static void *maybe_do_cpp_memalign_slow(size_t align, size_t size, TypeTag type) {
   retry_memaligh_data data;
   data.align = align;
   data.size = size;
+  data.type = type;
   return handle_oom(retry_do_memalign, &data,
                     false, true);
 }
 
-inline void* do_memalign_or_cpp_memalign(size_t align, size_t size) {
-  void *rv = do_memalign(align, size);
+inline void* do_memalign_or_cpp_memalign(size_t align, size_t size, TypeTag type) {
+  void *rv = do_memalign(align, size, type);
   if (LIKELY(rv != NULL)) {
     return rv;
   }
-  return maybe_do_cpp_memalign_slow(align, size);
+  return maybe_do_cpp_memalign_slow(align, size, type);
 }
 
 // Must be called with the page lock held.
@@ -1170,7 +1172,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
     report_large = should_report_large(num_pages);
   } else {
     SpinLockHolder h(Static::pageheap_lock());
-    Span* span = Static::pageheap()->New(num_pages);
+    Span* span = Static::pageheap()->New(num_pages, type);
     result = (UNLIKELY(span == NULL) ? NULL : SpanToMallocResult(span));
     report_large = should_report_large(num_pages);
   }
@@ -1445,14 +1447,14 @@ ALWAYS_INLINE void* do_realloc(void* old_ptr, size_t new_size) {
 // memalign/posix_memalign/valloc/pvalloc will not be invoked very
 // often.  This requirement simplifies our implementation and allows
 // us to tune for expected allocation patterns.
-void* do_memalign(size_t align, size_t size) {
+void* do_memalign(size_t align, size_t size, TypeTag type) {
   ASSERT((align & (align - 1)) == 0);
   ASSERT(align > 0);
   if (size + align < size) return NULL;         // Overflow
 
   // Fall back to malloc if we would already align this memory access properly.
   if (align <= AlignmentForSize(size)) {
-    void* p = do_malloc(size);
+    void* p = do_typed_malloc(size, type);
     ASSERT((reinterpret_cast<uintptr_t>(p) % align) == 0);
     return p;
   }
@@ -1488,13 +1490,13 @@ void* do_memalign(size_t align, size_t size) {
     // Any page-level allocation will be fine
     // TODO: We could put the rest of this page in the appropriate
     // TODO: cache but it does not seem worth it.
-    Span* span = Static::pageheap()->New(tcmalloc::pages(size));
+    Span* span = Static::pageheap()->New(tcmalloc::pages(size), type);
     return UNLIKELY(span == NULL) ? NULL : SpanToMallocResult(span);
   }
 
   // Allocate extra pages and carve off an aligned portion
   const Length alloc = tcmalloc::pages(size + align);
-  Span* span = Static::pageheap()->New(alloc);
+  Span* span = Static::pageheap()->New(alloc, type);
   if (UNLIKELY(span == NULL)) return NULL;
 
   // Skip starting portion so that we end up aligned
@@ -1838,22 +1840,29 @@ TC_ALIAS(tc_free);
 }
 #endif
 
-extern "C" PERFTOOLS_DLL_DECL void* tc_memalign(size_t align,
-                                                size_t size) PERFTOOLS_THROW {
-  void* result = do_memalign_or_cpp_memalign(align, size);
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_memalign(size_t align,
+                                                size_t size,
+                                                TypeTag type) PERFTOOLS_THROW {
+  void* result = do_memalign_or_cpp_memalign(align, size, type);
   MallocHook::InvokeNewHook(result, size);
   return result;
 }
 
-extern "C" PERFTOOLS_DLL_DECL int tc_posix_memalign(
-    void** result_ptr, size_t align, size_t size) PERFTOOLS_THROW {
+// Pass to typed equivalent
+extern "C" PERFTOOLS_DLL_DECL void* tc_memalign(size_t align,
+                                                size_t size) PERFTOOLS_THROW {
+  return tc_typed_memalign(align, size, 0);
+}
+
+extern "C" PERFTOOLS_DLL_DECL int tc_typed_posix_memalign(
+    void** result_ptr, size_t align, size_t size, TypeTag type) PERFTOOLS_THROW {
   if (((align % sizeof(void*)) != 0) ||
       ((align & (align - 1)) != 0) ||
       (align == 0)) {
     return EINVAL;
   }
 
-  void* result = do_memalign_or_cpp_memalign(align, size);
+  void* result = do_memalign_or_cpp_memalign(align, size, type);
   MallocHook::InvokeNewHook(result, size);
   if (UNLIKELY(result == NULL)) {
     return ENOMEM;
@@ -1863,26 +1872,44 @@ extern "C" PERFTOOLS_DLL_DECL int tc_posix_memalign(
   }
 }
 
+// Pass to typed equivalent
+extern "C" PERFTOOLS_DLL_DECL int tc_posix_memalign(
+    void** result_ptr, size_t align, size_t size) PERFTOOLS_THROW {
+  return tc_typed_posix_memalign(result_ptr, align, size, 0);
+}
+
 static size_t pagesize = 0;
 
-extern "C" PERFTOOLS_DLL_DECL void* tc_valloc(size_t size) PERFTOOLS_THROW {
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_valloc(size_t size,
+                                                    TypeTag type) PERFTOOLS_THROW {
   // Allocate page-aligned object of length >= size bytes
   if (pagesize == 0) pagesize = getpagesize();
-  void* result = do_memalign_or_cpp_memalign(pagesize, size);
+  void* result = do_memalign_or_cpp_memalign(pagesize, size, type);
   MallocHook::InvokeNewHook(result, size);
   return result;
 }
 
-extern "C" PERFTOOLS_DLL_DECL void* tc_pvalloc(size_t size) PERFTOOLS_THROW {
+// Pass to typed equivalent
+extern "C" PERFTOOLS_DLL_DECL void* tc_valloc(size_t size) PERFTOOLS_THROW {
+  return tc_typed_valloc(size, 0);
+}
+
+extern "C" PERFTOOLS_DLL_DECL void* tc_typed_pvalloc(size_t size,
+                                                     TypeTag type) PERFTOOLS_THROW {
   // Round up size to a multiple of pagesize
   if (pagesize == 0) pagesize = getpagesize();
   if (size == 0) {     // pvalloc(0) should allocate one page, according to
     size = pagesize;   // http://man.free4web.biz/man3/libmpatrol.3.html
   }
   size = (size + pagesize - 1) & ~(pagesize - 1);
-  void* result = do_memalign_or_cpp_memalign(pagesize, size);
+  void* result = do_memalign_or_cpp_memalign(pagesize, size, type);
   MallocHook::InvokeNewHook(result, size);
   return result;
+}
+
+// Pass to typed equivalent
+extern "C" PERFTOOLS_DLL_DECL void* tc_pvalloc(size_t size) PERFTOOLS_THROW {
+  return tc_typed_pvalloc(size, 0);
 }
 
 extern "C" PERFTOOLS_DLL_DECL void tc_malloc_stats(void) PERFTOOLS_THROW {
