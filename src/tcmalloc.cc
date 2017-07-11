@@ -1152,8 +1152,7 @@ inline bool should_report_large(Length num_pages) {
 }
 
 // Helper for do_malloc().
-// TODO(chris): Implement for do_malloc_pages (central free list stuff)
-inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
+inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
   void* result;
   bool report_large;
 
@@ -1165,7 +1164,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
   // from possibility of overflow, which rounding up could produce.
   //
   // See https://github.com/gperftools/gperftools/issues/723
-  if (UNLIKELY(!type && heap->SampleAllocation(size))) {
+  if (UNLIKELY(heap->SampleAllocation(size))) {
     result = DoSampledAllocation(size, type);
 
     SpinLockHolder h(Static::pageheap_lock());
@@ -1183,14 +1182,13 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type = 0) {
   return result;
 }
 
-ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type = 0) {
+ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type) {
   ASSERT(Static::IsInited());
   ASSERT(heap != NULL);
   size_t cl = Static::sizemap()->SizeClass(size);
   size = Static::sizemap()->class_to_size(cl);
 
-  // TODO(chris): Implement types for Sampled Allocations
-  if (UNLIKELY(!type && heap->SampleAllocation(size))) {
+  if (UNLIKELY(heap->SampleAllocation(size))) {
     return DoSampledAllocation(size, type);
   } else {
     // The common case, and also the simplest.  This just pops the
@@ -1199,7 +1197,7 @@ ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type
   }
 }
 
-ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type = 0) {
+ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type) {
   if (ThreadCache::have_tls) {
     if (LIKELY(size < ThreadCache::MinSizeForSlowPath())) {
       return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size, type);
@@ -1224,7 +1222,7 @@ static void *retry_malloc(void* size) {
   return do_malloc(reinterpret_cast<size_t>(size));
 }
 
-ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size, TypeTag type = 0) {
+ALWAYS_INLINE void* do_malloc_or_cpp_alloc(size_t size, TypeTag type) {
   void *rv = do_typed_malloc(size, type);
   if (LIKELY(rv != NULL)) {
     return rv;
@@ -1479,7 +1477,7 @@ void* do_memalign(size_t align, size_t size, TypeTag type) {
     if (cl < kNumClasses) {
       ThreadCache* heap = ThreadCache::GetCache();
       size = Static::sizemap()->class_to_size(cl);
-      return CheckedMallocResult(heap->Allocate(size, cl));
+      return CheckedMallocResult(heap->Allocate(size, cl, type));
     }
   }
 
@@ -1634,7 +1632,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_typed_malloc(size_t size, TypeTag type)
 //         the call to the (de)allocation function.
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_malloc(size_t size) PERFTOOLS_THROW {
-  void* result = do_malloc_or_cpp_alloc(size);
+  void* result = do_malloc_or_cpp_alloc(size, 0);
   MallocHook::InvokeNewHook(result, size);
   return result;
 }
@@ -1726,7 +1724,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_typed_realloc(void* old_ptr,
 extern "C" PERFTOOLS_DLL_DECL void* tc_realloc(void* old_ptr,
                                                size_t new_size) PERFTOOLS_THROW {
   if (old_ptr == NULL) {
-    void* result = do_malloc_or_cpp_alloc(new_size);
+    void* result = do_malloc_or_cpp_alloc(new_size, 0);
     MallocHook::InvokeNewHook(result, new_size);
     return result;
   }

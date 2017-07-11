@@ -101,7 +101,7 @@ class ThreadCache {
 
   // Allocate an object of the given size and class. The size given
   // must be the same as the size of the class in the size map.
-  void* Allocate(size_t size, size_t cl, TypeTag type = 0);
+  void* Allocate(size_t size, size_t cl, TypeTag type);
   void Deallocate(void* ptr, size_t size_class);
 
   void Scavenge(TypeTag type);

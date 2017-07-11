@@ -328,7 +328,7 @@ void CentralFreeList::Populate() {
   Span* span;
   {
     SpinLockHolder h(Static::pageheap_lock());
-    span = Static::pageheap()->New(npages);
+    span = Static::pageheap()->New(npages, 0);
     if (span) Static::pageheap()->RegisterSizeClass(span, size_class_);
   }
   if (span == NULL) {

@@ -243,9 +243,9 @@ class PERFTOOLS_DLL_DECL PageHeap {
   // Statistics on system, free, and unmapped bytes
   Stats stats_;
 
-  Span* SearchFreeAndLargeLists(Length n, TypeTag t = 0);
+  Span* SearchFreeAndLargeLists(Length n, TypeTag t);
 
-  bool GrowHeap(Length n, TypeTag t = 0);
+  bool GrowHeap(Length n, TypeTag t);
 
   // REQUIRES: span->length >= n
   // REQUIRES: span->location != IN_USE
@@ -265,7 +265,7 @@ class PERFTOOLS_DLL_DECL PageHeap {
 
   // Allocate a large span of length == n.  If successful, returns a
   // span of exactly the specified length.  Else, returns NULL.
-  Span* AllocLarge(Length n, TypeTag t = 0);
+  Span* AllocLarge(Length n, TypeTag t);
 
   // Coalesce span with neighboring spans if possible, prepend to
   // appropriate free list, and adjust stats.
