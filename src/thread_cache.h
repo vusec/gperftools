@@ -97,7 +97,10 @@ class ThreadCache {
   }
 
   // Total byte size in cache
-  size_t Size(TypeTag type = 0) const { return typed_freelist_map_.get(type)->size_; }
+  size_t Size() const {
+    FreeList* fl = typed_freelist_map_.get(0);
+    return (fl ? fl->size_ : 0);
+  }
 
   // Allocate an object of the given size and class. The size given
   // must be the same as the size of the class in the size map.
