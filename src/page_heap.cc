@@ -327,12 +327,15 @@ void PageHeap::Delete(Span* span) {
 }
 
 bool PageHeap::MayMergeSpans(Span *span, Span *other) {
-  // Disable merging
-  return false;
-  // if (aggressive_decommit_) {
-  //   return other->location != Span::IN_USE;
-  // }
-  // return span->location == other->location;
+  // If either span or other is typed and do not have the same type,
+  // then the spans may not merge.
+  if ((span->type != 0 || other->type != 0) && span->type != other->type)
+    return false;
+
+  if (aggressive_decommit_) {
+    return other->location != Span::IN_USE;
+  }
+  return span->location == other->location;
 }
 
 void PageHeap::MergeIntoFreeList(Span* span) {
