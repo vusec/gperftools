@@ -135,18 +135,14 @@ ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
   int fetch_count = Static::central_cache(type)[cl].RemoveRange(
       &start, &end, num_to_move);
 
-  ASSERT((start == NULL) == (fetch_count == 0));
-
-  // Set type for allocated span.
-  if (UNLIKELY(type)) {
+  #ifndef NDEBUG
     const PageID p = reinterpret_cast<uintptr_t>(start) >> kPageShift;
     Span *span = Static::pageheap()->GetDescriptor(p);
+    ASSERT(span != NULL && span->type == type);
+    Log(kLog, __FILE__, __LINE__, "span start is", span->start, "and length is", span->length);
+  #endif
 
-    ASSERT(span != NULL);
-    ASSERT(span->type == 0 || span->type == type);
-
-    span->type = type;
-  }
+  ASSERT((start == NULL) == (fetch_count == 0));
 
   if (--fetch_count >= 0) {
     list->size_ += byte_size * fetch_count;
