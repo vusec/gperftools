@@ -31,6 +31,14 @@
 // ---
 // Author: Sanjay Ghemawat
 
+// Headers needed for userfaultfd
+#include <linux/userfaultfd.h>
+#include <sys/syscall.h>
+#include <sys/ioctl.h>
+#include <pthread.h>
+#include <poll.h>
+#include <string.h>
+
 #include <config.h>
 #include <errno.h>                      // for EAGAIN, errno
 #include <fcntl.h>                      // for open, O_RDWR
@@ -85,8 +93,11 @@ static const bool kDebugMode = false;
 static const bool kDebugMode = true;
 #endif
 
+static long uffd = -1;
+
 // TODO(sanjay): Move the code below into the tcmalloc namespace
 using tcmalloc::kLog;
+using tcmalloc::kCrash;
 using tcmalloc::Log;
 
 // Anonymous namespace to avoid name conflicts on "CheckAddressBits".
@@ -485,26 +496,119 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
+static void* uffd_handler_thread(void* data) {
+  // const long              uffd = *(long*)data; // TODO(chris): remove this line?
+  static struct uffd_msg  msg;
+  static char            *page = NULL;
+  struct uffdio_copy      uffdio_copy;
+  int                     page_size, nready, fault_cnt = 0;
+  ssize_t                 nread;
+  struct pollfd           pollfd;
+
+  Log(kLog, __FILE__, __LINE__,
+      "Userfault thread started, reading from", uffd);
+
+  page_size = sysconf(_SC_PAGE_SIZE);
+  if((page = (char*)mmap(NULL, page_size, PROT_READ | PROT_WRITE,
+              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)) == NULL)
+    Log(kCrash, __FILE__, __LINE__,
+        "Could not map copy page for userfaultfd:", strerror(errno));
+
+  while(1) {
+    /* Start pollin' */
+    pollfd.fd = uffd;
+    pollfd.events = POLLIN;
+    if((nready = poll(&pollfd, 1, -1)) == -1)
+      Log(kCrash, __FILE__, __LINE__,
+          "Poll failed", strerror(errno));
+
+    /* Read userfaultfd message */
+    if ((nread = read(uffd, &msg, sizeof(msg))) == 0)
+      Log(kCrash, __FILE__, __LINE__, "EOF on userfaultfd");
+    else if (nread == -1)
+      Log(kCrash, __FILE__, __LINE__,
+          "Read error on userfaultfd:", strerror(errno));
+
+    /* We only expect page faults */
+    /* TODO(chris): do we? Not sure if features are set properly */
+    if (msg.event != UFFD_EVENT_PAGEFAULT) continue;
+      // Log(kCrash, __FILE__, __LINE__, "Unexpected event on userfaultfd");
+
+    Log(kLog, __FILE__, __LINE__, "UFFD:", 'A' + fault_cnt % 26,
+        (void*)msg.arg.pagefault.address);
+    memset(page, 'A' + fault_cnt++ % 26, page_size);
+
+    uffdio_copy.src = (unsigned long) page;
+    uffdio_copy.dst = (unsigned long)
+      msg.arg.pagefault.address & ~(page_size - 1);
+    uffdio_copy.len = page_size;
+    uffdio_copy.mode = 0;
+    uffdio_copy.copy = 0;
+    if (ioctl(uffd, UFFDIO_COPY, &uffdio_copy) == -1)
+      Log(kCrash, __FILE__, __LINE__,
+          "Failed to copy page in userfaultfd handler");
+  }
+
+  Log(kLog, __FILE__, __LINE__, "Userfault thread shutting down");
+  return NULL;
+}
+
+// Make sure the thread is started before
+static void setup_uffd() __attribute__((constructor));
+static void setup_uffd() {
+  pthread_t         tid = {0};
+  struct uffdio_api uffdio_api;
+  Log(kLog, __FILE__, __LINE__, "Setting up userfaultfd");
+
+  /* Create userfault file descriptor */
+  if((uffd = syscall(__NR_userfaultfd, 0)) == -1)
+    Log(kCrash, __FILE__, __LINE__, "Userfaultfd call failed");
+
+  /* Set userfaultfd api */
+  uffdio_api.api      = UFFD_API;
+  uffdio_api.features = 0;
+  if (ioctl(uffd, UFFDIO_API, &uffdio_api) == -1)
+    Log(kCrash, __FILE__, __LINE__, "Couldn't set userfaultfd api");
+
+  Log(kLog, __FILE__, __LINE__, "uffd: start thread");
+  if ((errno = pthread_create(&tid, NULL, uffd_handler_thread, NULL)))
+    Log(kCrash, __FILE__, __LINE__,
+        "Could not create uffd handler thread", strerror(errno));
+
+  Log(kLog, __FILE__, __LINE__, "uffd: done");
+}
+
+
 void *AreaAlloc() {
   static MmapSysAllocator *mmap_alloc = new (mmap_space.buf) MmapSysAllocator();
+  struct uffdio_register   uffdio_register;
+  const size_t             fixed_size = 1l << kFixedSpanShift;
 
   SpinLockHolder lock_holder(&spinlock);
   size_t actual_size;
-  void* ptr = mmap_alloc->Alloc(1l << kFixedSpanShift,
-                                &actual_size,
-                                1l << kFixedSpanShift);
+  void* ptr = mmap_alloc->Alloc(fixed_size, &actual_size, fixed_size);
 
   if (ptr == MAP_FAILED) {
-    Log(kLog, __FILE__, __LINE__,
-        "AreaAlloc:", strerror(errno));
+    Log(kLog, __FILE__, __LINE__, "AreaAlloc:", strerror(errno));
     return NULL;
   }
 
-  ASSERT(actual_size == (1l << kFixedSpanShift));
+  // Only execute if uffd has been initialized. The following block
+  // registers the freshly allocated range with our uffd handler.
+  if (LIKELY(uffd != -1)) {
+    uffdio_register.range.start = (unsigned long) ptr;
+    uffdio_register.range.len = fixed_size;
+    uffdio_register.mode = UFFDIO_REGISTER_MODE_MISSING;
+
+    if (ioctl(uffd, UFFDIO_REGISTER, &uffdio_register) == -1)
+      Log(kCrash, __FILE__, __LINE__, "uffdio_register:", strerror(errno));
+  }
+
+  ASSERT(actual_size == fixed_size);
   Log(kLog, __FILE__, __LINE__,
         "AreaAlloc: Successfully allocated mem", actual_size);
   // Emulate TCMalloc_SystemAlloc observable behavior
-  TCMalloc_SystemTaken += 1l << kFixedSpanShift;
+  TCMalloc_SystemTaken += fixed_size;
 
   return ptr;
 }
