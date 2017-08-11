@@ -151,10 +151,14 @@ DEFINE_bool(malloc_disable_memory_release,
             "Whether MADV_FREE/MADV_DONTNEED should be used"
             " to return unused memory to the system.");
 
-typedef struct AreaRange {
-  uintptr_t start;
-  uintptr_t end;
-} AreaRange;
+// Controls for baggy bounds
+DEFINE_int32(baggy_value,
+             EnvToInt("TCMALLOC_BAGGY_VALUE", 42),
+             "Controls the value used for Baggy Bounds check.");
+DEFINE_double(baggy_ratio,
+              EnvToDouble("TCMALLOC_BAGGY_RATIO", .5),
+              "Controls the ratio used for Baggy Bounds check.");
+
 
 // static allocators
 class SbrkSysAllocator : public SysAllocator {
