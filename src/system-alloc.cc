@@ -64,6 +64,7 @@
 #include "base/spinlock.h"              // for SpinLockHolder, SpinLock, etc
 #include "common.h"
 #include "internal_logging.h"
+#include "static_vars.h"       // for Static
 
 // On systems (like freebsd) that don't define MAP_ANONYMOUS, use the old
 // form of the name instead.
@@ -500,23 +501,70 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-static void* uffd_handler_thread(void* data) {
-  // const long              uffd = *(long*)data; // TODO(chris): remove this line?
+static void fill_redzones (const void*  ptr,
+                           const size_t size,
+                           const size_t object_size) {
+  uintptr_t
+    page         = reinterpret_cast<uintptr_t>(ptr);
+  const uintptr_t
+    area_size    = 1l << 32,
+    base         = page & ~(area_size - 1), // Calculate area
+    end          = page + size;
+  const size_t
+    page_id      = (page - base) >> 12,
+    redzone_size = object_size * FLAGS_baggy_ratio,
+    total_size   = object_size + redzone_size,
+    shift        = (page_id * size) % total_size,
+    waste        = (end - base) % total_size;
+
+  /* Set default value for entire page before filling redzones */
+  memset(reinterpret_cast<void*>(page), FLAGS_baggy_value, size);
+
+  /* If this is not the first page, alignment might be offset (not
+     page aligned). We calculate how much we have to shift and make
+     sure the number of redzone bytes is adjusted. Finally, we offset
+     the page pointer to point to the start of the next object. */
+  if (shift > object_size) {
+    memset(reinterpret_cast<void*>(page),
+           FLAGS_baggy_value, total_size - shift); // redzone
+    page += total_size - shift;
+  } else if (shift > 0) {
+    memset(reinterpret_cast<void*>(page + (object_size - shift)),
+           FLAGS_baggy_value, redzone_size);
+    page += (object_size - shift) + redzone_size;
+  }
+
+  /* After correction for the first object, fill the rest of the redzones. */
+  for (; page + total_size <= end; page += total_size) {
+    memset(reinterpret_cast<void*>(page + object_size),
+           FLAGS_baggy_value, redzone_size); // redzone value
+  }
+
+  /* An object (and its redzone) may overlap with the next page, we
+     call this wasted bytes. If there are wasted bytes, fill it
+     without overflowing to the next page. */
+  if (waste > object_size) {
+    memset(reinterpret_cast<void*>(page + object_size),
+           FLAGS_baggy_value, waste - object_size);
+  }
+}
+
+static void* uffd_handler_thread(void*) {
+  const int               page_size   = sysconf(_SC_PAGE_SIZE);
   static struct uffd_msg  msg;
-  static char            *page = NULL;
+  static char            *page        = NULL;
   struct uffdio_copy      uffdio_copy;
-  int                     page_size, nready, fault_cnt = 0;
+  size_t                  object_size = 8;
+  int                     nready;
   ssize_t                 nread;
   struct pollfd           pollfd;
 
-  Log(kLog, __FILE__, __LINE__,
-      "Userfault thread started, reading from", uffd);
+  Log(kLog, __FILE__, __LINE__, "Userfault thread started");
 
-  page_size = sysconf(_SC_PAGE_SIZE);
   if((page = (char*)mmap(NULL, page_size, PROT_READ | PROT_WRITE,
               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)) == NULL)
     Log(kCrash, __FILE__, __LINE__,
-        "Could not map copy page for userfaultfd:", strerror(errno));
+        "Could not mmap copy page for userfaultfd:", strerror(errno));
 
   while(1) {
     /* Start pollin' */
@@ -538,16 +586,24 @@ static void* uffd_handler_thread(void* data) {
     if (msg.event != UFFD_EVENT_PAGEFAULT) continue;
       // Log(kCrash, __FILE__, __LINE__, "Unexpected event on userfaultfd");
 
-    Log(kLog, __FILE__, __LINE__, "UFFD:", 'A' + fault_cnt % 26,
-        (void*)msg.arg.pagefault.address);
-    memset(page, 'A' + fault_cnt++ % 26, page_size);
+    const PageID p = reinterpret_cast<uintptr_t>((void *)msg.arg.pagefault.address) >> kPageShift;
+    tcmalloc::Span* s = tcmalloc::Static::pageheap()->GetDescriptor(p);
+    Log(kLog, __FILE__, __LINE__, "UFFD:", (void*)msg.arg.pagefault.address);
+    Log(kLog, __FILE__, __LINE__, "Span at", s);
+    Log(kLog, __FILE__, __LINE__, "Span",
+        s->type, s->sizeclass, tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass));
 
-    uffdio_copy.src = (unsigned long) page;
-    uffdio_copy.dst = (unsigned long)
-      msg.arg.pagefault.address & ~(page_size - 1);
-    uffdio_copy.len = page_size;
+    // Filling in redzones
+    // TODO(Chris): Change object_size
+    fill_redzones(page, page_size, object_size);
+
+    uffdio_copy.src  = reinterpret_cast<unsigned long>(page);
+    uffdio_copy.dst  = reinterpret_cast<unsigned long long>
+      (msg.arg.pagefault.address & ~(page_size - 1));
+    uffdio_copy.len  = page_size;
     uffdio_copy.mode = 0;
     uffdio_copy.copy = 0;
+
     if (ioctl(uffd, UFFDIO_COPY, &uffdio_copy) == -1)
       Log(kCrash, __FILE__, __LINE__,
           "Failed to copy page in userfaultfd handler");
