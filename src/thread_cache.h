@@ -551,11 +551,11 @@ inline void ThreadCache::ResetUseEmergencyMalloc() {
 }
 
 inline bool ThreadCache::IsUseEmergencyMalloc() {
-#if defined(HAVE_TLS) && defined(ENABLE_EMERGENCY_MALLOC)
-  return UNLIKELY(threadlocal_data_.use_emergency_malloc);
-#else
+// #if defined(HAVE_TLS) && defined(ENABLE_EMERGENCY_MALLOC)
+//   return UNLIKELY(threadlocal_data_.use_emergency_malloc);
+// #else
   return false;
-#endif
+// #endif
 }
 
 
