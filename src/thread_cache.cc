@@ -139,7 +139,7 @@ ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
     const PageID p = reinterpret_cast<uintptr_t>(start) >> kPageShift;
     Span *span = Static::pageheap()->GetDescriptor(p);
     ASSERT(span != NULL && span->type == type);
-    Log(kLog, __FILE__, __LINE__, "span start is", span->start, "and length is", span->length);
+    // Log(kLog, __FILE__, __LINE__, "span start is", span->start, "and length is", span->length);
   #endif
 
   ASSERT((start == NULL) == (fetch_count == 0));
