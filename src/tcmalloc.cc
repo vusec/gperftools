@@ -170,6 +170,7 @@ using tcmalloc::Static;
 using tcmalloc::ThreadCache;
 
 DECLARE_double(tcmalloc_release_rate);
+DECLARE_double(baggy_ratio);
 
 // For windows, the printf we use to report large allocs is
 // potentially dangerous: it could cause a malloc that would cause an
@@ -1198,8 +1199,15 @@ ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type
 }
 
 ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type) {
+  size_t cl, object_size, size_w_redzone = size;
+  if (size <= kMaxSize) {
+    cl = Static::sizemap()->SizeClass(size);
+    object_size = Static::sizemap()->class_to_size(cl);
+    size_w_redzone = object_size + (object_size * FLAGS_baggy_ratio);
+  }
+
   if (ThreadCache::have_tls) {
-    if (LIKELY(size < ThreadCache::MinSizeForSlowPath())) {
+    if (LIKELY(size_w_redzone < ThreadCache::MinSizeForSlowPath())) {
       return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size, type);
     }
     if (UNLIKELY(ThreadCache::IsUseEmergencyMalloc())) {
@@ -1207,7 +1215,7 @@ ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type) {
     }
   }
 
-  if (size <= kMaxSize) {
+  if (size_w_redzone <= kMaxSize) {
     return do_malloc_small(ThreadCache::GetCache(), size, type);
   } else {
     return do_malloc_pages(ThreadCache::GetCache(), size, type);

@@ -39,6 +39,9 @@
 #include "page_heap.h"         // for PageHeap
 #include "static_vars.h"       // for Static
 
+#include "base/commandlineflags.h"      // for RegisterFlagValidator, etc
+DECLARE_double(baggy_ratio);
+
 using std::min;
 using std::max;
 
@@ -323,12 +326,18 @@ int CentralFreeList::FetchFromOneSpans(int N, void **start, void **end) {
 void CentralFreeList::Populate() {
   // Release central list lock while operating on pageheap
   lock_.Unlock();
-  const size_t npages = Static::sizemap()->class_to_pages(size_class_);
+  size_t original_size = Static::sizemap()->class_to_size(size_class_);
+  size_t size_w_redzone = original_size + (original_size * FLAGS_baggy_ratio);
+  size_t cl = Static::sizemap()->SizeClass(size_w_redzone);
+
+  const size_t npages = Static::sizemap()->class_to_pages(cl);
 
   Span* span;
   {
     SpinLockHolder h(Static::pageheap_lock());
     span = Static::pageheap()->New(npages, type_);
+    // TODO(chris): Set object_size (original size_class)in span, so
+    // it can be used while filling
     if (span) Static::pageheap()->RegisterSizeClass(span, size_class_);
   }
   if (span == NULL) {
@@ -350,7 +359,7 @@ void CentralFreeList::Populate() {
   void** tail = &span->objects;
   char* ptr = reinterpret_cast<char*>(span->start << kPageShift);
   char* limit = ptr + (npages << kPageShift);
-  const size_t size = Static::sizemap()->ByteSizeForClass(size_class_);
+  const size_t size = Static::sizemap()->ByteSizeForClass(cl);
   int num = 0;
   while (ptr + size <= limit) {
     *tail = ptr;
