@@ -511,6 +511,7 @@ Length PageHeap::ReleaseAtLeastNPages(Length num_pages) {
 
 bool PageHeap::EnsureLimit(Length n, bool withRelease)
 {
+  return true; // Effectively disable limit
   Length limit = (FLAGS_tcmalloc_heap_limit_mb*1024*1024) >> kPageShift;
   if (limit == 0) return true; //there is no limit
 
