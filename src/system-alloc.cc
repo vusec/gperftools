@@ -554,7 +554,7 @@ static void* uffd_handler_thread(void*) {
   static struct uffd_msg  msg;
   static char            *page        = NULL;
   struct uffdio_copy      uffdio_copy;
-  size_t                  object_size = 8;
+  size_t                  object_size;
   int                     nready;
   ssize_t                 nread;
   struct pollfd           pollfd;
@@ -584,17 +584,20 @@ static void* uffd_handler_thread(void*) {
     /* We only expect page faults */
     /* TODO(chris): do we? Not sure if features are set properly */
     if (msg.event != UFFD_EVENT_PAGEFAULT) continue;
-      // Log(kCrash, __FILE__, __LINE__, "Unexpected event on userfaultfd");
 
     const PageID p = reinterpret_cast<uintptr_t>((void *)msg.arg.pagefault.address) >> kPageShift;
     tcmalloc::Span* s = tcmalloc::Static::pageheap()->GetDescriptor(p);
+
+    #ifndef NDEBUG
     Log(kLog, __FILE__, __LINE__, "UFFD:", (void*)msg.arg.pagefault.address);
     Log(kLog, __FILE__, __LINE__, "Span at", s);
     Log(kLog, __FILE__, __LINE__, "Span",
-        s->type, s->sizeclass, tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass));
+        s->type, s->sizeclass,
+        tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass));
+    #endif
 
     // Filling in redzones
-    // TODO(Chris): Change object_size
+    object_size =  tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass);
     fill_redzones(page, page_size, object_size);
 
     uffdio_copy.src  = reinterpret_cast<unsigned long>(page);
