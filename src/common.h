@@ -96,6 +96,12 @@ static const size_t kNumClasses = kBaseClasses + 79;
 
 static const size_t kMaxThreadCacheSize = 4 << 20;
 
+// Allocate fixed sized spans when we grow the heap. We use 4GB slabs
+// per span. This allows us for simple pointer arithmetic to prevent
+// pointer to escape a span.
+static const size_t kAreaShift = 32;
+static const size_t kAreaSize  = 1l << kAreaShift;
+
 static const size_t kPageSize   = 1 << kPageShift;
 static const size_t kMaxSize    = 256 * 1024;
 static const size_t kAlignment  = 8;
@@ -132,11 +138,6 @@ static const int kMaxOverages = 3;
 static const int kMaxDynamicFreeListLength = 8192;
 
 static const Length kMaxValidPages = (~static_cast<Length>(0)) >> kPageShift;
-
-// Allocate fixed sized spans when we grow the heap. We use 4GB slabs
-// per span. This allows us for simple pointer arithmetic to prevent
-// pointer to escape a span.
-static const size_t kFixedSpanShift = 32;
 
 // Amount of AreaRanges to reserve while reading /proc/self/maps.
 static const size_t kMapsBufferSize = 1 << 11;

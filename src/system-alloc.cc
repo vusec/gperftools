@@ -507,8 +507,7 @@ static void fill_redzones (const void*  ptr,
   uintptr_t
     page         = reinterpret_cast<uintptr_t>(ptr);
   const uintptr_t
-    area_size    = 1l << 32,
-    base         = page & ~(area_size - 1), // Calculate area
+    base         = page & ~(kAreaSize - 1), // Calculate area
     end          = page + size;
   const size_t
     page_id      = (page - base) >> 12,
@@ -645,11 +644,10 @@ static void setup_uffd() {
 void *AreaAlloc() {
   static MmapSysAllocator *mmap_alloc = new (mmap_space.buf) MmapSysAllocator();
   struct uffdio_register   uffdio_register;
-  const size_t             fixed_size = 1l << kFixedSpanShift;
 
   SpinLockHolder lock_holder(&spinlock);
   size_t actual_size;
-  void* ptr = mmap_alloc->Alloc(fixed_size, &actual_size, fixed_size);
+  void* ptr = mmap_alloc->Alloc(kAreaSize, &actual_size, kAreaSize);
 
   if (ptr == MAP_FAILED) {
     Log(kLog, __FILE__, __LINE__, "AreaAlloc:", strerror(errno));
@@ -660,18 +658,18 @@ void *AreaAlloc() {
   // registers the freshly allocated range with our uffd handler.
   if (LIKELY(uffd != -1)) {
     uffdio_register.range.start = (unsigned long) ptr;
-    uffdio_register.range.len = fixed_size;
+    uffdio_register.range.len = kAreaSize;
     uffdio_register.mode = UFFDIO_REGISTER_MODE_MISSING;
 
     if (ioctl(uffd, UFFDIO_REGISTER, &uffdio_register) == -1)
       Log(kCrash, __FILE__, __LINE__, "uffdio_register:", strerror(errno));
   }
 
-  ASSERT(actual_size == fixed_size);
+  ASSERT(actual_size == kAreaSize);
   Log(kLog, __FILE__, __LINE__,
         "AreaAlloc: Successfully allocated mem", actual_size);
   // Emulate TCMalloc_SystemAlloc observable behavior
-  TCMalloc_SystemTaken += fixed_size;
+  TCMalloc_SystemTaken += kAreaSize;
 
   return ptr;
 }
