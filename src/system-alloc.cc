@@ -587,6 +587,13 @@ static void* uffd_handler_thread(void*) {
     const PageID p = reinterpret_cast<uintptr_t>((void *)msg.arg.pagefault.address) >> kPageShift;
     tcmalloc::Span* s = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
+    if (s->sizeclass == 0) {
+#ifndef NDEBUG
+      Log(kLog, __FILE__, __LINE__, "UFFD: Skip filling for sizeclass 0");
+#endif
+      continue;
+    }
+
     #ifndef NDEBUG
     Log(kLog, __FILE__, __LINE__, "UFFD:", (void*)msg.arg.pagefault.address);
     Log(kLog, __FILE__, __LINE__, "Span at", s);
