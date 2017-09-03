@@ -42,6 +42,7 @@ PERFTOOLS_DLL_DECL void* tc_typed_new(size_t size, TypeTag type);
 PERFTOOLS_DLL_DECL void* tc_typed_memalign(size_t align, size_t size, TypeTag type) PERFTOOLS_THROW;
 PERFTOOLS_DLL_DECL void* tc_typed_valloc(size_t size, TypeTag type) PERFTOOLS_THROW;
 PERFTOOLS_DLL_DECL void* tc_typed_pvalloc(size_t size, TypeTag type) PERFTOOLS_THROW;
+int is_redzone(void* ptr);
 
 #ifdef __cplusplus
 }
