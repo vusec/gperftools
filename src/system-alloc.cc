@@ -501,18 +501,6 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-// TODO(chris): (Problem) In our system we define areas of 4 GB
-// each. We only allow memory objects of the same type within one
-// area. Currently, we calculate the offset of the redzones relative
-// to the base of the area where the object lives. This gives problems
-// when we have two allocations of the same type, but different
-// sizes. Since they have the same type, they may live in the same
-// area. However, different sizes may cause different redzone offsets
-// to be calculated for the same area. (Solution) Instead of
-// calculating the offset based on the area, we can base it on the
-// span where it lives. Since a span describes a _range_ of
-// consecutive (tcmalloc!) pages, we can still use our original
-// filling method.
 int is_redzone(void* ptr) {
   const PageID    p            = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
   tcmalloc::Span* s            = tcmalloc::Static::pageheap()->GetDescriptor(p);
@@ -520,58 +508,65 @@ int is_redzone(void* ptr) {
   if (s->type == 0) return 0; // Assume no redzones if typeless
 
   const ssize_t   object_size  = tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass);
-  const uintptr_t base         = (uintptr_t)ptr & ~(kAreaSize - 1); // Calculate area
+  const size_t    cl           = tcmalloc::Static::sizemap()->SizeClass(object_size + (object_size * FLAGS_baggy_ratio));
+  const ssize_t   total_size   = tcmalloc::Static::sizemap()->ByteSizeForClass(cl);
+  const size_t    redzone_size = total_size - object_size;
+  const uintptr_t base         = s->start << kPageShift;
   const ssize_t   offset       = (uintptr_t)ptr - base;
-  const size_t    redzone_size = object_size * FLAGS_baggy_ratio;
-  const ssize_t   total_size   = object_size + redzone_size;
 
-  return ((offset % total_size) - object_size) >= 0;
+  return ((int)(offset % total_size) - object_size) >= 0;
 }
 
-// TODO(chris): See TODO for is_redzone.
-static void fill_redzones (uintptr_t page,
-                           const uintptr_t fill_location,
-                           const size_t    size,
-                           const size_t    object_size) {
-  // uintptr_t
-  //   page         = reinterpret_cast<uintptr_t>(ptr);
-  const uintptr_t
-    base         = page & ~(kAreaSize - 1), // Calculate area
-    end          = page + size;
+static void fill_redzones (tcmalloc::Span *span,
+                           const void     *pf_addr,
+                           const void     *fill_ptr,
+                           size_t          page_size) {
+
+  uintptr_t
+    real_page    = reinterpret_cast<uintptr_t>(pf_addr),
+    page         = reinterpret_cast<uintptr_t>(fill_ptr);
   const size_t
-    page_id      = (page - base) >> 12,
-    redzone_size = object_size * FLAGS_baggy_ratio,
-    total_size   = object_size + redzone_size,
-    shift        = (page_id * size) % total_size,
-    waste        = (end - base) % total_size;
+    object_size  = tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass),
+    cl           = tcmalloc::Static::sizemap()->SizeClass(object_size + (object_size * FLAGS_baggy_ratio)),
+    total_size   = tcmalloc::Static::sizemap()->ByteSizeForClass(cl),
+    redzone_size = total_size - object_size;
+  const uintptr_t
+    base         = span->start << kPageShift, // Shift in tcmalloc pages!!
+    local_end    = page + page_size,
+    real_end     = real_page + page_size;
+  const size_t
+    page_no      = (real_page - base) >> 12, // System pages!!
+    shift        = (page_no * page_size) % total_size,
+    waste        = (real_end - base) % total_size;
+
+  ASSERT(shift < total_size);
+  ASSERT(waste < total_size);
 
   /* Set default value for entire page before filling redzones */
-  memset(reinterpret_cast<void*>(fill_location), 0, size);
+  memset(reinterpret_cast<void*>(page), 0, page_size);
 
   /* If this is not the first page, alignment might be offset (not
      page aligned). We calculate how much we have to shift and make
      sure the number of redzone bytes is adjusted. Finally, we offset
      the page pointer to point to the start of the next object. */
   if (shift > object_size) {
-    ASSERT(total_size - shift <= end);
-    memset(reinterpret_cast<void*>(fill_location), FLAGS_baggy_value, total_size - shift); // redzone
+    memset(reinterpret_cast<void*>(page), FLAGS_baggy_value, total_size - shift); // redzone
     page += total_size - shift;
   } else if (shift > 0) {
-    ASSERT((object_size - shift) + redzone_size <= end);
-    memset(reinterpret_cast<void*>(fill_location + (object_size - shift)), FLAGS_baggy_value, redzone_size);
+    memset(reinterpret_cast<void*>(page + (object_size - shift)), FLAGS_baggy_value, redzone_size);
     page += (object_size - shift) + redzone_size;
   }
 
   /* After correction for the first object, fill the rest of the redzones. */
-  for (; page + total_size <= end; page += total_size) {
-    memset(reinterpret_cast<void*>(fill_location + object_size), FLAGS_baggy_value, redzone_size); // redzone value
+  for (; page + total_size <= local_end; page += total_size) {
+    memset(reinterpret_cast<void*>(page + object_size), FLAGS_baggy_value, redzone_size); // redzone value
   }
 
   /* An object (and its redzone) may overlap with the next page, we
      call this wasted bytes. If there are wasted bytes, fill it
      without overflowing to the next page. */
   if (waste > object_size) {
-    memset(reinterpret_cast<void*>(fill_location + object_size), FLAGS_baggy_value, waste - object_size);
+    memset(reinterpret_cast<void*>(page + object_size), FLAGS_baggy_value, waste - object_size);
   }
 }
 
@@ -611,15 +606,13 @@ static void* uffd_handler_thread(void*) {
     if (msg.event != UFFD_EVENT_PAGEFAULT)
       Log(kCrash, __FILE__, __LINE__, "UFFD: received non-requested event");
 
-    const PageID p = reinterpret_cast<uintptr_t>((void *)msg.arg.pagefault.address) >> kPageShift;
-    tcmalloc::Span* s = tcmalloc::Static::pageheap()->GetDescriptor(p);
-
-    const size_t
-      object_size = tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass);
-    const char
-      *pf_addr = reinterpret_cast<const char*>(msg.arg.pagefault.address & ~(page_size - 1));
+    const PageID    p       = reinterpret_cast<uintptr_t>((void *)msg.arg.pagefault.address) >> kPageShift;
+    tcmalloc::Span *s       = tcmalloc::Static::pageheap()->GetDescriptor(p);
+    const char     *pf_addr = reinterpret_cast<const char*>(msg.arg.pagefault.address & ~(page_size - 1));
 
 #ifndef NDEBUG
+    const size_t
+      object_size = tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass);
     Log(kLog, __FILE__, __LINE__, "UFFD:", (void*)msg.arg.pagefault.address);
     Log(kLog, __FILE__, __LINE__, "Span at", (void*)(s->start << kPageShift), "with type", s->type);
     Log(kLog, __FILE__, __LINE__, "Span length, size class, object size",
@@ -633,9 +626,7 @@ static void* uffd_handler_thread(void*) {
 #endif
       memset((void*)page, 0, page_size);
     } else {
-      fill_redzones(reinterpret_cast<uintptr_t>(pf_addr),
-                    reinterpret_cast<uintptr_t>(page),
-                    page_size, object_size);
+      fill_redzones(s, pf_addr, page, page_size);
     }
 
     uffdio_copy.src  = reinterpret_cast<unsigned long>(page);
