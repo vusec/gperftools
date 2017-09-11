@@ -527,49 +527,46 @@ static void fill_redzones_large (tcmalloc::Span *span,
                                  uintptr_t       real_page,
                                  uintptr_t       local_page,
                                  size_t          page_size) {
-  uintptr_t base, real_end, object_start;
-  size_t object_count, object_size, cl, total_size, redzone_size,
-    shift, prev_shift, offset, rest;
+  uintptr_t base, real_end, object_start, object_end, redzone_end;
+  size_t object_count, object_size, cl, total_size, redzone_size, difference;
+  tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
 
   memset((void*)local_page, 0, page_size);
 
   real_end     = real_page + page_size;
   base         = span->start << kPageShift; // Shift in tcmalloc pages!!
-  object_size  = tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass);
-  cl           = tcmalloc::Static::sizemap()->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
-  total_size   = tcmalloc::Static::sizemap()->ByteSizeForClass(cl);
+  object_size  = sm->ByteSizeForClass(span->sizeclass);
+  cl           = sm->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
+  total_size   = sm->ByteSizeForClass(cl);
   redzone_size = total_size - object_size;
   object_count = (real_page - base) / total_size;
   object_start = base + (object_count * total_size);
-  offset       = real_page - object_start;
-  rest         = object_size - offset;
-  prev_shift   = ((real_page - base) % total_size) % page_size;
-  shift        = ((real_end - base) % total_size) % page_size;
+  object_end   = object_start + object_size;
+  redzone_end  = object_end + redzone_size;
+  difference   = object_end - real_page;
 
-  // Given: objects are filled with zeroes and 'rest' is the size in
-  // bytes from the start of the current page till the end of the
-  // object. If the rest size is greater than one page, there can not
-  // be a redzone on this page. We can safely return to the caller.
-  if (rest >= page_size) return;
+  ASSERT(redzone_end == object_start + total_size);
 
-  // If shift is greater than zero, redzone should start from shift.
-  if (shift > 0) {
-    ASSERT(prev_shift == 0);    // We expect no prev_shift if we have shift
-    local_page += shift;
+  // If the end of the object lies beyond this page, leave the page blank.
+  if (object_end >= real_end ) {
+    return;
+  // If object end lies on this page, calculate offset and redzone size.
+  } else if (object_end >= real_page && object_end < real_end) {
+    local_page   += difference; // Add the difference as offset
 
-    // Adjust redzone size if necessary
-    if (redzone_size + shift > page_size)
-      redzone_size = page_size - shift;
-  } else if (prev_shift > 0) {
-    ASSERT(shift == 0);    // We expect no shift if we have prev_shift
-
-    // Adjust redzone size, so it will overlap this page correctly
-    redzone_size -= page_size - prev_shift;
+    if (redzone_size > page_size - difference)
+      redzone_size = page_size - difference;
+  // Else, object ends before this page, so we must start with a redzone.
   } else {
-    return; // If shift is zero, there are no redzones in this page.
+    // Subtract the difference from the end of the object to the
+    // current page, to get the size to be filled from this point.
+    redzone_size -= real_page - object_end;
+
+    if (redzone_size > page_size)
+      redzone_size = page_size;
   }
 
-  memset((void*)local_page, 0, redzone_size);
+  memset((void*)local_page, FLAGS_baggy_value, redzone_size);
 }
 
 
