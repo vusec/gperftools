@@ -502,16 +502,17 @@ void InitSystemAllocators(void) {
 }
 
 int is_redzone(void* ptr) {
-  const PageID    p            = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
-  tcmalloc::Span* s            = tcmalloc::Static::pageheap()->GetDescriptor(p);
+  const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+  tcmalloc::Span*    s  = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
   if (s->type == 0) return 0; // Assume no redzones if typeless
 
-  const ssize_t   object_size  = tcmalloc::Static::sizemap()->ByteSizeForClass(s->sizeclass);
-  const size_t    cl           = tcmalloc::Static::sizemap()->SizeClass(object_size + (object_size * FLAGS_baggy_ratio));
-  const ssize_t   total_size   = tcmalloc::Static::sizemap()->ByteSizeForClass(cl);
-  const uintptr_t base         = s->start << kPageShift;
-  const ssize_t   offset       = (uintptr_t)ptr - base;
+  tcmalloc::SizeMap* sm          = tcmalloc::Static::sizemap();
+  const ssize_t      object_size = sm->ByteSizeForClass(s->sizeclass);
+  const size_t       cl          = sm->SizeClass(object_size * (1 + FLAGS_baggy_ratio));
+  const ssize_t      total_size  = sm->ByteSizeForClass(cl);
+  const uintptr_t    base        = s->start << kPageShift;
+  const ssize_t      offset      = (uintptr_t)ptr - base;
 
   return ((int)(offset % total_size) - object_size) >= 0;
 }
@@ -576,14 +577,15 @@ static void fill_redzones_small (tcmalloc::Span *span,
                                  size_t          page_size) {
   uintptr_t base, local_end, real_end;
   size_t object_size, cl, total_size, redzone_size, shift, spare;
+  tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
 
   /* Set default value for entire page before filling redzones */
   memset((void*)local_page, 0, page_size);
 
   /* Calculate the total size (object + redzone) */
-  object_size = tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass);
-  cl          = tcmalloc::Static::sizemap()->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
-  total_size  = tcmalloc::Static::sizemap()->ByteSizeForClass(cl);
+  object_size = sm->ByteSizeForClass(span->sizeclass);
+  cl          = sm->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
+  total_size  = sm->ByteSizeForClass(cl);
 
   ASSERT(span->sizeclass > 0 && object_size <= page_size);
 
