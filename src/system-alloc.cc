@@ -744,16 +744,16 @@ static void setup_uffd() {
 }
 
 
-void *AreaAlloc() {
+void *ArenaAlloc() {
   static MmapSysAllocator *mmap_alloc = new (mmap_space.buf) MmapSysAllocator();
   struct uffdio_register   uffdio_register;
 
   SpinLockHolder lock_holder(&spinlock);
   size_t actual_size;
-  void* ptr = mmap_alloc->Alloc(kAreaSize, &actual_size, kAreaSize);
+  void* ptr = mmap_alloc->Alloc(kArenaSize, &actual_size, kArenaSize);
 
   if (ptr == MAP_FAILED) {
-    Log(kLog, __FILE__, __LINE__, "AreaAlloc:", strerror(errno));
+    Log(kLog, __FILE__, __LINE__, "ArenaAlloc:", strerror(errno));
     return NULL;
   }
 
@@ -761,18 +761,18 @@ void *AreaAlloc() {
   // registers the freshly allocated range with our uffd handler.
   if (LIKELY(uffd != -1)) {
     uffdio_register.range.start = (unsigned long) ptr;
-    uffdio_register.range.len = kAreaSize;
+    uffdio_register.range.len = kArenaSize;
     uffdio_register.mode = UFFDIO_REGISTER_MODE_MISSING;
 
     if (ioctl(uffd, UFFDIO_REGISTER, &uffdio_register) == -1)
       Log(kCrash, __FILE__, __LINE__, "uffdio_register:", strerror(errno));
   }
 
-  ASSERT(actual_size == kAreaSize);
+  ASSERT(actual_size == kArenaSize);
   Log(kLog, __FILE__, __LINE__,
-        "AreaAlloc: Successfully allocated mem", actual_size);
+        "ArenaAlloc: Successfully allocated mem", actual_size);
   // Emulate TCMalloc_SystemAlloc observable behavior
-  TCMalloc_SystemTaken += kAreaSize;
+  TCMalloc_SystemTaken += kArenaSize;
 
   return ptr;
 }

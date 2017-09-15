@@ -608,10 +608,10 @@ static void RecordGrowth(size_t growth) {
 
 bool PageHeap::GrowHeap(Length n, TypeTag t) {
   ASSERT(kMaxPages >= kMinSystemAlloc);
-  Length ask = 1 << (kAreaShift - kPageShift);
+  Length ask = 1 << (kArenaShift - kPageShift);
   if (n > kMaxValidPages || n > ask) return false;
 
-  void* ptr = AreaAlloc();
+  void* ptr = ArenaAlloc();
 
   if (ptr == NULL) return false;
 

@@ -64,7 +64,7 @@ void* TCMalloc_SystemAlloc(size_t bytes, size_t *actual_bytes,
 
 // Allocate a large single area with padding.
 extern PERFTOOLS_DLL_DECL
-void* AreaAlloc();
+void* ArenaAlloc();
 
 // This call is a hint to the operating system that the pages
 // contained in the specified range of memory will not be used for a

@@ -99,8 +99,8 @@ static const size_t kMaxThreadCacheSize = 4 << 20;
 // Allocate fixed sized spans when we grow the heap. We use 4GB slabs
 // per span. This allows us for simple pointer arithmetic to prevent
 // pointer to escape a span.
-static const size_t kAreaShift = 32;
-static const size_t kAreaSize  = 1l << kAreaShift;
+static const size_t kArenaShift = 32;
+static const size_t kArenaSize  = 1l << kArenaShift;
 
 static const size_t kPageSize   = 1 << kPageShift;
 static const size_t kMaxSize    = 256 * 1024;
