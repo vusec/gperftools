@@ -46,6 +46,7 @@ namespace tcmalloc {
 struct Span {
   PageID        start;          // Starting page number
   Length        length;         // Number of pages in span
+  Length        redzone;        // Number of pages for redzone (if cl == 0)
   Span*         next;           // Used when in link list
   Span*         prev;           // Used when in link list
   void*         objects;        // Linked list of free objects

@@ -1157,7 +1157,17 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
   void* result;
   bool report_large;
 
-  Length num_pages = tcmalloc::pages(size);
+  Length
+    num_pages = tcmalloc::pages(size * (1 + FLAGS_baggy_ratio)),
+    redzone_pages = 0;
+  // If size too big, do not create redzones
+  if (UNLIKELY(num_pages == 0)) {
+    num_pages = tcmalloc::pages(size);
+  } else {
+    redzone_pages = tcmalloc::pages(size * FLAGS_baggy_ratio);
+    ASSERT(num_pages == tcmalloc::pages(size) + redzone_pages);
+    size *= 1 + FLAGS_baggy_ratio;
+  }
 
   // NOTE: we're passing original size here as opposed to rounded-up
   // size as we do in do_malloc_small. The difference is small here
@@ -1173,6 +1183,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
   } else {
     SpinLockHolder h(Static::pageheap_lock());
     Span* span = Static::pageheap()->New(num_pages, type);
+    if (span) span->redzone = redzone_pages;
     result = (UNLIKELY(span == NULL) ? NULL : SpanToMallocResult(span));
     report_large = should_report_large(num_pages);
   }
@@ -1489,6 +1500,9 @@ void* do_memalign(size_t align, size_t size, TypeTag type) {
     }
   }
 
+  // Calculate number of redzone pages needed.
+  Length redzone_pages = tcmalloc::pages(size * FLAGS_baggy_ratio);
+
   // We will allocate directly from the page heap
   SpinLockHolder h(Static::pageheap_lock());
 
@@ -1496,13 +1510,14 @@ void* do_memalign(size_t align, size_t size, TypeTag type) {
     // Any page-level allocation will be fine
     // TODO: We could put the rest of this page in the appropriate
     // TODO: cache but it does not seem worth it.
-    Span* span = Static::pageheap()->New(tcmalloc::pages(size), type);
+    Span* span = Static::pageheap()->New(tcmalloc::pages(size) + redzone_pages, type);
+    if (span) span->redzone = redzone_pages;
     return UNLIKELY(span == NULL) ? NULL : SpanToMallocResult(span);
   }
 
   // Allocate extra pages and carve off an aligned portion
   const Length alloc = tcmalloc::pages(size + align);
-  Span* span = Static::pageheap()->New(alloc, type);
+  Span* span = Static::pageheap()->New(alloc + redzone_pages, type);
   if (UNLIKELY(span == NULL)) return NULL;
 
   // Skip starting portion so that we end up aligned
@@ -1518,12 +1533,14 @@ void* do_memalign(size_t align, size_t size, TypeTag type) {
   }
 
   // Skip trailing portion that we do not need to return
-  const Length needed = tcmalloc::pages(size);
+  const Length needed = tcmalloc::pages(size) + redzone_pages;
   ASSERT(span->length >= needed);
   if (span->length > needed) {
     Span* trailer = Static::pageheap()->Split(span, needed);
     Static::pageheap()->Delete(trailer);
   }
+
+  span->redzone = redzone_pages;
   return SpanToMallocResult(span);
 }
 
