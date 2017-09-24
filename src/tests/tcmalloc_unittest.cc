@@ -1398,8 +1398,8 @@ static int RunAllTests(int argc, char** argv) {
 
   TestHugeThreadCache();
   TestRanges();
-  TestReleaseToSystem();
-  TestAggressiveDecommit();
+  // TestReleaseToSystem();
+  // TestAggressiveDecommit();
   TestSetNewMode();
   TestErrno();
 
