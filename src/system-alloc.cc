@@ -501,17 +501,32 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
+void check_redzone(void* ptr) __attribute__ ((noinline));
+void check_redzone(void* ptr) {
+  if (is_redzone(ptr))
+    Log(kCrash, __FILE__, __LINE__,
+        "Memory violation:", ptr, "points to a redzone!");
+}
+
 int is_redzone(void* ptr) {
   const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
-  tcmalloc::Span*    s  = tcmalloc::Static::pageheap()->GetDescriptor(p);
+  tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
-  if (s->type == 0) return 0; // Assume no redzones if typeless
+  // if (span->type == 0) return 0; // TODO(chris): Assume no redzones if typeless?
 
+  // Check for large object redzone
+  if (span->redzone > 0) {
+    Length    shift    = span->length - span->redzone;
+    uintptr_t rz_start = (span->start + shift) << kPageShift; // Shift in tcmalloc pages!!
+    return (uintptr_t)ptr >= rz_start;
+  }
+
+  // Check for small object redzone
   tcmalloc::SizeMap* sm          = tcmalloc::Static::sizemap();
-  const ssize_t      object_size = sm->ByteSizeForClass(s->sizeclass);
+  const ssize_t      object_size = sm->ByteSizeForClass(span->sizeclass);
   const size_t       cl          = sm->SizeClass(object_size * (1 + FLAGS_baggy_ratio));
   const ssize_t      total_size  = sm->ByteSizeForClass(cl);
-  const uintptr_t    base        = s->start << kPageShift;
+  const uintptr_t    base        = span->start << kPageShift;
   const ssize_t      offset      = (uintptr_t)ptr - base;
 
   return ((int)(offset % total_size) - object_size) >= 0;
@@ -521,7 +536,11 @@ static void fill_redzones_pages (tcmalloc::Span *span,
                                  uintptr_t       real_page,
                                  uintptr_t       local_page,
                                  size_t          page_size) {
-  Log(kLog, __FILE__, __LINE__, "UFFD: Skipping sizeclass 0 for now.");
+  Length    shift    = span->length - span->redzone;
+  uintptr_t rz_start = (span->start + shift) << kPageShift; // Shift in tcmalloc pages!!
+  int       value    = (real_page >= rz_start) ? FLAGS_baggy_value : 0;
+
+  memset((void*)local_page, value, page_size);
 }
 
 static void fill_redzones_large (tcmalloc::Span *span,
