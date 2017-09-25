@@ -706,16 +706,18 @@ static void* uffd_handler_thread(void*) {
 #endif
 
     // Filling in redzones
-    object_size = tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass);
     if (span->sizeclass == 0) {
       fill_redzones_pages(span, pf_page,
                           reinterpret_cast<uintptr_t>(page), page_size);
-    } else if (object_size > page_size) {
-      fill_redzones_large(span, pf_page,
-                          reinterpret_cast<uintptr_t>(page), page_size);
     } else {
-      fill_redzones_small(span, pf_page,
-                          reinterpret_cast<uintptr_t>(page), page_size);
+      object_size = tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass);
+      if (object_size > page_size) {
+        fill_redzones_large(span, pf_page,
+                            reinterpret_cast<uintptr_t>(page), page_size);
+      } else {
+        fill_redzones_small(span, pf_page,
+                            reinterpret_cast<uintptr_t>(page), page_size);
+      }
     }
 
     uffdio_copy.src  = reinterpret_cast<unsigned long>(page);

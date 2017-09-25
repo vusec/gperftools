@@ -257,9 +257,8 @@ class PERFTOOLS_DLL_DECL PageHeap {
   Span* Carve(Span* span, Length n);
 
   void RecordSpan(Span* span) {
-    pagemap_.set(span->start, span);
-    if (span->length > 1) {
-      pagemap_.set(span->start + span->length - 1, span);
+    for (int i = 0; i < span->length; i++) {
+      pagemap_.set(span->start + i, span);
     }
   }
 
