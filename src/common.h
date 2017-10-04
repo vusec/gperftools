@@ -91,13 +91,13 @@ static const size_t kPageShift  = 16;
 static const size_t kNumClasses = kBaseClasses + 73;
 #else
 static const size_t kPageShift  = 13;
-static const size_t kNumClasses = kBaseClasses + 79;
+static const size_t kNumClasses = kBaseClasses + 79 + 32;
 #endif
 
 static const size_t kMaxThreadCacheSize = 4 << 20;
 
 static const size_t kPageSize   = 1 << kPageShift;
-static const size_t kMaxSize    = 256 * 1024;
+static const size_t kMaxSize    = 256 * 1024 * 2;;
 static const size_t kAlignment  = 8;
 static const size_t kLargeSizeClass = 0;
 // For all span-lengths < kMaxPages we keep an exact-size list.

@@ -1231,7 +1231,8 @@ ALWAYS_INLINE void* do_calloc(size_t n, size_t elem_size) {
 
   void* result = do_malloc_or_cpp_alloc(size);
   if (result != NULL) {
-    memset(result, 0, size);
+    if (size <= kMaxSize)
+      memset(result, 0, size);
   }
   return result;
 }
