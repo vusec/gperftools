@@ -37,6 +37,7 @@
 #define TCMALLOC_SPAN_H_
 
 #include <config.h>
+#include <gperftools/typed_tcmalloc.h> // for TypeTag.
 #include "common.h"
 
 namespace tcmalloc {
@@ -45,9 +46,11 @@ namespace tcmalloc {
 struct Span {
   PageID        start;          // Starting page number
   Length        length;         // Number of pages in span
+  Length        redzone;        // Number of pages for redzone (if cl == 0)
   Span*         next;           // Used when in link list
   Span*         prev;           // Used when in link list
   void*         objects;        // Linked list of free objects
+  TypeTag       type;           // The type associated with this span
   unsigned int  refcount : 16;  // Number of non-free objects
   unsigned int  sizeclass : 8;  // Size-class for small objects (or 0)
   unsigned int  location : 2;   // Is the span on a freelist, and if so, which?
@@ -72,7 +75,7 @@ void Event(Span* span, char op, int v = 0);
 #endif
 
 // Allocator/deallocator for spans
-Span* NewSpan(PageID p, Length len);
+Span* NewSpan(PageID p, Length len, TypeTag t = 0);
 void DeleteSpan(Span* span);
 
 // -------------------------------------------------------------------------

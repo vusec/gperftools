@@ -343,6 +343,11 @@ atomicops_unittest_SOURCES = src/tests/atomicops_unittest.cc \
 atomicops_unittest_LDADD = $(LIBSPINLOCK)
 
 
+### ------- typed allocations
+
+### Explicitly export typed tcmalloc header!
+perftoolsinclude_HEADERS += src/gperftools/typed_tcmalloc.h
+
 ### ------- stack trace
 
 if WITH_STACK_TRACE

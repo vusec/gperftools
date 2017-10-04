@@ -39,12 +39,17 @@
 #include "page_heap.h"         // for PageHeap
 #include "static_vars.h"       // for Static
 
+#include "base/commandlineflags.h"      // for RegisterFlagValidator, etc
+DECLARE_double(baggy_ratio);
+
 using std::min;
 using std::max;
 
 namespace tcmalloc {
 
-void CentralFreeList::Init(size_t cl) {
+void CentralFreeList::Init(size_t cl, TypeTag type) {
+  if (type) memset(&lock_, 0, sizeof(lock_));
+  type_ = type;
   size_class_ = cl;
   tcmalloc::DLL_Init(&empty_);
   tcmalloc::DLL_Init(&nonempty_);
@@ -149,7 +154,7 @@ void CentralFreeList::ReleaseToSpans(void* object) {
 }
 
 bool CentralFreeList::EvictRandomSizeClass(
-    int locked_size_class, bool force) {
+    int locked_size_class, bool force, TypeTag type) {
   static int race_counter = 0;
   int t = race_counter++;  // Updated without a lock, but who cares.
   if (t >= kNumClasses) {
@@ -161,7 +166,7 @@ bool CentralFreeList::EvictRandomSizeClass(
   ASSERT(t >= 0);
   ASSERT(t < kNumClasses);
   if (t == locked_size_class) return false;
-  return Static::central_cache()[t].ShrinkCache(locked_size_class, force);
+  return Static::central_cache(type)[t].ShrinkCache(locked_size_class, force);
 }
 
 bool CentralFreeList::MakeCacheSpace() {
@@ -170,8 +175,8 @@ bool CentralFreeList::MakeCacheSpace() {
   // Check if we can expand this cache?
   if (cache_size_ == max_cache_size_) return false;
   // Ok, we'll try to grab an entry from some other size class.
-  if (EvictRandomSizeClass(size_class_, false) ||
-      EvictRandomSizeClass(size_class_, true)) {
+  if (EvictRandomSizeClass(size_class_, false, type_) ||
+      EvictRandomSizeClass(size_class_, true, type_)) {
     // Succeeded in evicting, we're going to make our cache larger.
     // However, we may have dropped and re-acquired the lock in
     // EvictRandomSizeClass (via ShrinkCache and the LockInverter), so the
@@ -211,7 +216,7 @@ bool CentralFreeList::ShrinkCache(int locked_size_class, bool force)
   // the lock inverter to ensure that we never hold two size class locks
   // concurrently.  That can create a deadlock because there is no well
   // defined nesting order.
-  LockInverter li(&Static::central_cache()[locked_size_class].lock_, &lock_);
+  LockInverter li(&Static::central_cache(type_)[locked_size_class].lock_, &lock_);
   ASSERT(used_slots_ <= cache_size_);
   ASSERT(0 <= cache_size_);
   if (cache_size_ == 0) return false;
@@ -321,12 +326,16 @@ int CentralFreeList::FetchFromOneSpans(int N, void **start, void **end) {
 void CentralFreeList::Populate() {
   // Release central list lock while operating on pageheap
   lock_.Unlock();
-  const size_t npages = Static::sizemap()->class_to_pages(size_class_);
+  size_t original_size = Static::sizemap()->class_to_size(size_class_);
+  size_t size_w_redzone = original_size + (original_size * FLAGS_baggy_ratio);
+  size_t cl = Static::sizemap()->SizeClass(size_w_redzone);
+
+  const size_t npages = Static::sizemap()->class_to_pages(cl);
 
   Span* span;
   {
     SpinLockHolder h(Static::pageheap_lock());
-    span = Static::pageheap()->New(npages);
+    span = Static::pageheap()->New(npages, type_);
     if (span) Static::pageheap()->RegisterSizeClass(span, size_class_);
   }
   if (span == NULL) {
@@ -348,7 +357,7 @@ void CentralFreeList::Populate() {
   void** tail = &span->objects;
   char* ptr = reinterpret_cast<char*>(span->start << kPageShift);
   char* limit = ptr + (npages << kPageShift);
-  const size_t size = Static::sizemap()->ByteSizeForClass(size_class_);
+  const size_t size = Static::sizemap()->ByteSizeForClass(cl);
   int num = 0;
   while (ptr + size <= limit) {
     *tail = ptr;

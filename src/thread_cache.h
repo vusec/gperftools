@@ -35,6 +35,9 @@
 #define TCMALLOC_THREAD_CACHE_H_
 
 #include <config.h>
+
+#include <gperftools/typed_tcmalloc.h> // for TypeTag.
+
 #ifdef HAVE_PTHREAD
 #include <pthread.h>                    // for pthread_t, pthread_key_t
 #endif
@@ -82,17 +85,29 @@ class ThreadCache {
   void Cleanup();
 
   // Accessors (mostly just for printing stats)
-  int freelist_length(size_t cl) const { return list_[cl].length(); }
+  int freelist_length(size_t cl, TypeTag type = 0) const {
+    if (UNLIKELY(type)) {
+      void * ptr = typed_freelist_map_.get(type);
+      if (!ptr) return 0;
+
+      return reinterpret_cast<FreeList*>(ptr)->length();
+    } else {
+      return list_[cl].length();
+    }
+  }
 
   // Total byte size in cache
-  size_t Size() const { return size_; }
+  size_t Size() const {
+    FreeList* fl = typed_freelist_map_.get(0);
+    return (fl ? fl->size_ : 0);
+  }
 
   // Allocate an object of the given size and class. The size given
   // must be the same as the size of the class in the size map.
-  void* Allocate(size_t size, size_t cl);
+  void* Allocate(size_t size, size_t cl, TypeTag type);
   void Deallocate(void* ptr, size_t size_class);
 
-  void Scavenge();
+  void Scavenge(TypeTag type);
 
   int GetSamplePeriod();
 
@@ -158,12 +173,15 @@ class ThreadCache {
 #endif
 
    public:
+    size_t        size_;                  // Combined size of data
+
     void Init() {
       list_ = NULL;
       length_ = 0;
       lowater_ = 0;
       max_length_ = 1;
       length_overages_ = 0;
+      size_ = 0;
     }
 
     // Return current length of list
@@ -229,16 +247,23 @@ class ThreadCache {
     }
   };
 
+  // Add given type to a linked list of known types. This information
+  // will be used by Scavenge to find all typed free lists.
+  void AddKnownType(TypeTag type);
+
+  // Get a free list based on size class and type tag.
+  FreeList* GetTypedFreeList (size_t cl, TypeTag type, bool canCreate);
+
   // Gets and returns an object from the central cache, and, if possible,
   // also adds some objects of that size class to this thread cache.
-  void* FetchFromCentralCache(size_t cl, size_t byte_size);
+  void* FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type);
 
   // Releases some number of items from src.  Adjusts the list's max_length
   // to eventually converge on num_objects_to_move(cl).
-  void ListTooLong(FreeList* src, size_t cl);
+  void ListTooLong(FreeList* src, size_t cl, TypeTag type);
 
   // Releases N items from this thread cache.
-  void ReleaseToCentralCache(FreeList* src, size_t cl, int N);
+  void ReleaseToCentralCache(FreeList* src, size_t cl, int N, TypeTag type);
 
   // Increase max_size_ by reducing unclaimed_cache_space_ or by
   // reducing the max_size_ of some other thread.  In both cases,
@@ -316,13 +341,23 @@ class ThreadCache {
   // This class is laid out with the most frequently used fields
   // first so that hot elements are placed on the same cache line.
 
-  size_t        size_;                  // Combined size of data
+  //size_t        size_;                  // Combined size of data
   size_t        max_size_;              // size_ > max_size_ --> Scavenge()
 
   // We sample allocations, biased by the size of the allocation
   Sampler       sampler_;               // A sampler
 
   FreeList      list_[kNumClasses];     // Array indexed by size-class
+
+  struct TypeNode {
+    TypeNode* next;
+    TypeTag   type;
+  };
+
+  TypeNode* known_types;
+  PageHeapAllocator<FreeList[kNumClasses]> freelist_array_allocator_;
+  typedef TypeMap<FreeList> FreeListArrayMap;
+  FreeListArrayMap typed_freelist_map_;
 
   pthread_t     tid_;                   // Which thread owns it
   bool          in_setspecific_;        // In call to pthread_setspecific?
@@ -359,22 +394,71 @@ inline bool ThreadCache::SampleAllocation(size_t k) {
 #endif
 }
 
-inline void* ThreadCache::Allocate(size_t size, size_t cl) {
+inline void ThreadCache::AddKnownType(TypeTag type) {
+  TypeNode* next = known_types;
+
+  // TODO(chris): Probably way too slow! Maybe preallocate a few nodes?
+  known_types = (TypeNode*)MetaDataAlloc(sizeof(TypeNode));
+  known_types->next = next;
+  known_types->type = type;
+}
+
+inline ThreadCache::FreeList*
+ThreadCache::GetTypedFreeList (size_t cl, TypeTag type, bool canCreate) {
+  // Fast path: no type information available.
+  if (LIKELY(!type)) {
+    return &list_[cl];
+  }
+
+  FreeList *freelist_array;
+  void * ptr = typed_freelist_map_.get(type);
+
+  // If no such list exist, we must create it!
+  if (UNLIKELY(!ptr)) {
+    if (!canCreate) return NULL;
+    ptr = (void*)freelist_array_allocator_.New();
+    freelist_array =
+      reinterpret_cast<FreeList*>(ptr);
+
+    for (size_t i = 0; i < kNumClasses; ++i) {
+      freelist_array[i].Init();
+    }
+
+    typed_freelist_map_.set(type, freelist_array);
+    AddKnownType(type);
+  } else {
+    // Get a free list array based on type.
+    freelist_array = reinterpret_cast<FreeList*>(ptr);
+  }
+
+  // Now that we must have a FreeList array. Now we can extract the free
+  ASSERT(freelist_array != NULL);
+
+  return &freelist_array[cl];
+}
+
+inline void* ThreadCache::Allocate(size_t size, size_t cl, TypeTag type) {
   ASSERT(size <= kMaxSize);
   ASSERT(size == Static::sizemap()->ByteSizeForClass(cl));
 
-  FreeList* list = &list_[cl];
+  FreeList* list = GetTypedFreeList(cl, type, true /* canCreate */);
   if (UNLIKELY(list->empty())) {
-    return FetchFromCentralCache(cl, size);
+    return FetchFromCentralCache(cl, size, type);
   }
-  size_ -= size;
+
+  list->size_ -= size;
   return list->Pop();
 }
 
 inline void ThreadCache::Deallocate(void* ptr, size_t cl) {
-  FreeList* list = &list_[cl];
-  size_ += Static::sizemap()->ByteSizeForClass(cl);
-  ssize_t size_headroom = max_size_ - size_ - 1;
+  const PageID p = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+  Span *span = Static::pageheap()->GetDescriptor(p);
+
+  ASSERT(span != NULL);
+
+  FreeList* list = GetTypedFreeList(cl, span->type, true /* canCreate */);
+  list->size_ += Static::sizemap()->ByteSizeForClass(cl);
+  ssize_t size_headroom = max_size_ - list->size_ - 1;
 
   // This catches back-to-back frees of allocs in the same size
   // class. A more comprehensive (and expensive) test would be to walk
@@ -390,9 +474,9 @@ inline void ThreadCache::Deallocate(void* ptr, size_t cl) {
   // because of the bitwise-or trick that follows.
   if (UNLIKELY((list_headroom | size_headroom) < 0)) {
     if (list_headroom < 0) {
-      ListTooLong(list, cl);
+      ListTooLong(list, cl, span->type);
     }
-    if (size_ >= max_size_) Scavenge();
+    if (list->size_ >= max_size_) Scavenge(span->type);
   }
 }
 
@@ -467,14 +551,15 @@ inline void ThreadCache::ResetUseEmergencyMalloc() {
 }
 
 inline bool ThreadCache::IsUseEmergencyMalloc() {
-#if defined(HAVE_TLS) && defined(ENABLE_EMERGENCY_MALLOC)
-  return UNLIKELY(threadlocal_data_.use_emergency_malloc);
-#else
+// #if defined(HAVE_TLS) && defined(ENABLE_EMERGENCY_MALLOC)
+//   return UNLIKELY(threadlocal_data_.use_emergency_malloc);
+// #else
   return false;
-#endif
+// #endif
 }
 
 
 }  // namespace tcmalloc
 
 #endif  // TCMALLOC_THREAD_CACHE_H_
+

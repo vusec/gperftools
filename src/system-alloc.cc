@@ -31,6 +31,14 @@
 // ---
 // Author: Sanjay Ghemawat
 
+// Headers needed for userfaultfd
+#include <linux/userfaultfd.h>
+#include <sys/syscall.h>
+#include <sys/ioctl.h>
+#include <pthread.h>
+#include <poll.h>
+#include <string.h>
+
 #include <config.h>
 #include <errno.h>                      // for EAGAIN, errno
 #include <fcntl.h>                      // for open, O_RDWR
@@ -50,11 +58,13 @@
 #endif
 #include <new>                          // for operator new
 #include <gperftools/malloc_extension.h>
+#include "base/sysinfo.h"               // for ProcMapsIterator
 #include "base/basictypes.h"
 #include "base/commandlineflags.h"
 #include "base/spinlock.h"              // for SpinLockHolder, SpinLock, etc
 #include "common.h"
 #include "internal_logging.h"
+#include "static_vars.h"       // for Static
 
 // On systems (like freebsd) that don't define MAP_ANONYMOUS, use the old
 // form of the name instead.
@@ -84,8 +94,11 @@ static const bool kDebugMode = false;
 static const bool kDebugMode = true;
 #endif
 
+static long uffd = -1;
+
 // TODO(sanjay): Move the code below into the tcmalloc namespace
 using tcmalloc::kLog;
+using tcmalloc::kCrash;
 using tcmalloc::Log;
 
 // Anonymous namespace to avoid name conflicts on "CheckAddressBits".
@@ -138,6 +151,15 @@ DEFINE_bool(malloc_disable_memory_release,
             EnvToBool("TCMALLOC_DISABLE_MEMORY_RELEASE", false),
             "Whether MADV_FREE/MADV_DONTNEED should be used"
             " to return unused memory to the system.");
+
+// Controls for baggy bounds
+DEFINE_int32(baggy_value,
+             EnvToInt("TCMALLOC_BAGGY_VALUE", 42),
+             "Controls the value used for Baggy Bounds check.");
+DEFINE_double(baggy_ratio,
+              EnvToDouble("TCMALLOC_BAGGY_RATIO", .5),
+              "Controls the ratio used for Baggy Bounds check.");
+
 
 // static allocators
 class SbrkSysAllocator : public SysAllocator {
@@ -284,9 +306,9 @@ void* MmapSysAllocator::Alloc(size_t size, size_t *actual_size,
   // that this code runs for a while before the flags are initialized.
   // Chances are we never get here before the flags are initialized since
   // sbrk is used until the heap is exhausted (before mmap is used).
-  if (FLAGS_malloc_skip_mmap) {
-    return NULL;
-  }
+  // if (FLAGS_malloc_skip_mmap) {
+  //   return NULL;
+  // }
 
   // Enforce page alignment
   if (pagesize == 0) pagesize = getpagesize();
@@ -315,7 +337,7 @@ void* MmapSysAllocator::Alloc(size_t size, size_t *actual_size,
   // therefore  size + extra < (1<<NBITS)
   void* result = mmap(NULL, size + extra,
                       PROT_READ|PROT_WRITE,
-                      MAP_PRIVATE|MAP_ANONYMOUS,
+                      MAP_NORESERVE|MAP_PRIVATE|MAP_ANONYMOUS,
                       -1, 0);
   if (result == reinterpret_cast<void*>(MAP_FAILED)) {
     return NULL;
@@ -477,6 +499,303 @@ void InitSystemAllocators(void) {
   }
 
   sys_alloc = tc_get_sysalloc_override(sdef);
+}
+
+void check_redzone(void* ptr) __attribute__ ((noinline));
+void check_redzone(void* ptr) {
+  if (is_redzone(ptr))
+    Log(kCrash, __FILE__, __LINE__,
+        "Memory violation:", ptr, "points to a redzone!");
+}
+
+int is_redzone(void* ptr) {
+  const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+  tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
+
+  // if (span->type == 0) return 0; // TODO(chris): Assume no redzones if typeless?
+
+  // Check for large object redzone
+  if (span->redzone > 0) {
+    Length    shift    = span->length - span->redzone;
+    uintptr_t rz_start = (span->start + shift) << kPageShift; // Shift in tcmalloc pages!!
+    return (uintptr_t)ptr >= rz_start;
+  }
+
+  // Check for small object redzone
+  tcmalloc::SizeMap* sm          = tcmalloc::Static::sizemap();
+  const ssize_t      object_size = sm->ByteSizeForClass(span->sizeclass);
+  const size_t       cl          = sm->SizeClass(object_size * (1 + FLAGS_baggy_ratio));
+  const ssize_t      total_size  = sm->ByteSizeForClass(cl);
+  const uintptr_t    base        = span->start << kPageShift;
+  const ssize_t      offset      = (uintptr_t)ptr - base;
+
+  return ((int)(offset % total_size) - object_size) >= 0;
+}
+
+static void fill_redzones_pages (tcmalloc::Span *span,
+                                 uintptr_t       real_page,
+                                 uintptr_t       local_page,
+                                 size_t          page_size) {
+  Length    shift    = span->length - span->redzone;
+  uintptr_t rz_start = (span->start + shift) << kPageShift; // Shift in tcmalloc pages!!
+  int       value    = (real_page >= rz_start) ? FLAGS_baggy_value : 0;
+
+  memset((void*)local_page, value, page_size);
+}
+
+static void fill_redzones_large (tcmalloc::Span *span,
+                                 uintptr_t       real_page,
+                                 uintptr_t       local_page,
+                                 size_t          page_size) {
+  uintptr_t base, real_end, object_start, object_end, redzone_end;
+  size_t object_count, object_size, cl, total_size, redzone_size, difference;
+  tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
+
+  memset((void*)local_page, 0, page_size);
+
+  real_end     = real_page + page_size;
+  base         = span->start << kPageShift; // Shift in tcmalloc pages!!
+  object_size  = sm->ByteSizeForClass(span->sizeclass);
+  cl           = sm->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
+  total_size   = sm->ByteSizeForClass(cl);
+  redzone_size = total_size - object_size;
+  object_count = (real_page - base) / total_size;
+  object_start = base + (object_count * total_size);
+  object_end   = object_start + object_size;
+  redzone_end  = object_end + redzone_size;
+  difference   = object_end - real_page;
+
+  ASSERT(redzone_end == object_start + total_size);
+
+  // If the end of the object lies beyond this page, leave the page blank.
+  if (object_end >= real_end ) {
+    return;
+  // If object end lies on this page, calculate offset and redzone size.
+  } else if (object_end >= real_page && object_end < real_end) {
+    local_page   += difference; // Add the difference as offset
+
+    if (redzone_size > page_size - difference)
+      redzone_size = page_size - difference;
+  // Else, object ends before this page, so we must start with a redzone.
+  } else {
+    // Subtract the difference from the end of the object to the
+    // current page, to get the size to be filled from this point.
+    redzone_size -= real_page - object_end;
+
+    if (redzone_size > page_size)
+      redzone_size = page_size;
+  }
+
+  memset((void*)local_page, FLAGS_baggy_value, redzone_size);
+}
+
+
+static void fill_redzones_small (tcmalloc::Span *span,
+                                 uintptr_t       real_page,
+                                 uintptr_t       local_page,
+                                 size_t          page_size) {
+  uintptr_t base, local_end, real_end;
+  size_t object_size, cl, total_size, redzone_size, shift, spare;
+  tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
+
+  /* Set default value for entire page before filling redzones */
+  memset((void*)local_page, 0, page_size);
+
+  /* Calculate the total size (object + redzone) */
+  object_size = sm->ByteSizeForClass(span->sizeclass);
+  cl          = sm->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
+  total_size  = sm->ByteSizeForClass(cl);
+
+  ASSERT(span->sizeclass > 0 && object_size <= page_size);
+
+  base        = span->start << kPageShift;      // Shift in tcmalloc pages!!
+  real_end    = real_page + page_size;          // End of this page
+  spare       = (real_end - base) % total_size; // Spare bytes at the end
+
+  local_end    = local_page + page_size;
+  redzone_size = total_size - object_size;
+  shift        = (real_page - base) % total_size;
+
+  /* If this is not the first page, alignment might be offset (not
+     page aligned). We calculate how much we have to shift and make
+     sure the number of redzone bytes is adjusted. Finally, we offset
+     the page pointer to point to the start of the next object. */
+  if (shift > object_size) {
+    ASSERT(local_page + (total_size - shift) < local_end);
+
+    memset(reinterpret_cast<void*>(local_page),
+           FLAGS_baggy_value,
+           total_size - shift);
+    local_page += total_size - shift;
+  } else if (shift > 0) {
+    ASSERT(local_page + redzone_size < local_end);
+
+    memset(reinterpret_cast<void*>(local_page + (object_size - shift)),
+           FLAGS_baggy_value,
+           redzone_size);
+    local_page += (object_size - shift) + redzone_size;
+  }
+
+  /* After correction for the first object, fill the rest of the redzones. */
+  for (; local_page + total_size < local_end; local_page += total_size) {
+    ASSERT(local_page + total_size < local_end);
+
+    memset(reinterpret_cast<void*>(local_page + object_size),
+           FLAGS_baggy_value,
+           redzone_size);
+  }
+
+  /* An object (and its redzone) may overlap with the next page, we
+     call this spare bytes. If there are spare bytes, fill it without
+     overflowing to the next page. */
+  if (spare > object_size) {
+    ASSERT(local_page + (spare - object_size) < local_end);
+
+    memset(reinterpret_cast<void*>(local_page + object_size),
+           FLAGS_baggy_value,
+           spare - object_size);
+  }
+}
+
+static void* uffd_handler_thread(void*) {
+  const size_t            page_size = sysconf(_SC_PAGE_SIZE);
+  size_t                  object_size;
+  static struct uffd_msg  msg;
+  static char            *page      = (char*)mmap(NULL, page_size,
+                                                  PROT_READ | PROT_WRITE,
+                                                  MAP_PRIVATE | MAP_ANONYMOUS,
+                                                  -1, 0);
+  struct uffdio_copy      uffdio_copy;
+  int                     nready;
+  ssize_t                 nread;
+  struct pollfd           pollfd;
+
+  Log(kLog, __FILE__, __LINE__, "Userfault thread started");
+
+  if(page  == NULL)
+    Log(kCrash, __FILE__, __LINE__,
+        "Could not mmap copy page for userfaultfd:", strerror(errno));
+
+  while(1) {
+    /* Start pollin' */
+    pollfd.fd = uffd;
+    pollfd.events = POLLIN;
+    if((nready = poll(&pollfd, 1, -1)) == -1)
+      Log(kCrash, __FILE__, __LINE__,
+          "Poll failed", strerror(errno));
+
+    /* Read userfaultfd message */
+    if ((nread = read(uffd, &msg, sizeof(msg))) == 0)
+      Log(kCrash, __FILE__, __LINE__, "EOF on userfaultfd");
+    else if (nread == -1)
+      Log(kCrash, __FILE__, __LINE__,
+          "Read error on userfaultfd:", strerror(errno));
+
+    /* We only expect page faults */
+    if (msg.event != UFFD_EVENT_PAGEFAULT)
+      Log(kCrash, __FILE__, __LINE__, "UFFD: received non-requested event");
+
+    const PageID    p       = reinterpret_cast<uintptr_t>((void *)msg.arg.pagefault.address) >> kPageShift;
+    tcmalloc::Span *span    = tcmalloc::Static::pageheap()->GetDescriptor(p);
+    uintptr_t       pf_page = msg.arg.pagefault.address & ~(page_size - 1);
+
+#ifndef NDEBUG
+    // Print page fault address, span type and object size.
+    Log(kLog, __FILE__, __LINE__, "UFFD:", (void*)msg.arg.pagefault.address,
+        span->type, tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass));
+#endif
+
+    // Filling in redzones
+    if (span->sizeclass == 0) {
+      fill_redzones_pages(span, pf_page,
+                          reinterpret_cast<uintptr_t>(page), page_size);
+    } else {
+      object_size = tcmalloc::Static::sizemap()->ByteSizeForClass(span->sizeclass);
+      if (object_size > page_size) {
+        fill_redzones_large(span, pf_page,
+                            reinterpret_cast<uintptr_t>(page), page_size);
+      } else {
+        fill_redzones_small(span, pf_page,
+                            reinterpret_cast<uintptr_t>(page), page_size);
+      }
+    }
+
+    uffdio_copy.src  = reinterpret_cast<unsigned long>(page);
+    uffdio_copy.dst  = pf_page;
+    uffdio_copy.len  = page_size;
+    uffdio_copy.mode = 0;
+    uffdio_copy.copy = 0;
+
+    if (ioctl(uffd, UFFDIO_COPY, &uffdio_copy) == -1)
+      Log(kCrash, __FILE__, __LINE__,
+          "Failed to copy page in userfaultfd handler");
+
+#ifndef NDEBUG
+    Log(kLog, __FILE__, __LINE__, "UFFD SUCCESSSSSSSSSSSSSSS ");
+#endif
+  }
+
+  Log(kLog, __FILE__, __LINE__, "Userfault thread shutting down");
+  return NULL;
+}
+
+// Make sure the thread is started before
+static void setup_uffd() __attribute__((constructor));
+static void setup_uffd() {
+  pthread_t         tid = {0};
+  struct uffdio_api uffdio_api;
+  Log(kLog, __FILE__, __LINE__, "Setting up userfaultfd");
+
+  /* Create userfault file descriptor */
+  if((uffd = syscall(__NR_userfaultfd, 0)) == -1)
+    Log(kCrash, __FILE__, __LINE__, "Userfaultfd call failed");
+
+  /* Set userfaultfd api */
+  uffdio_api.api      = UFFD_API;
+  uffdio_api.features = 0;
+  if (ioctl(uffd, UFFDIO_API, &uffdio_api) == -1)
+    Log(kCrash, __FILE__, __LINE__, "Couldn't set userfaultfd api");
+
+  Log(kLog, __FILE__, __LINE__, "uffd: start thread");
+  if ((errno = pthread_create(&tid, NULL, uffd_handler_thread, NULL)))
+    Log(kCrash, __FILE__, __LINE__,
+        "Could not create uffd handler thread", strerror(errno));
+
+  Log(kLog, __FILE__, __LINE__, "uffd: done");
+}
+
+
+void *ArenaAlloc() {
+  static MmapSysAllocator *mmap_alloc = new (mmap_space.buf) MmapSysAllocator();
+  struct uffdio_register   uffdio_register;
+
+  SpinLockHolder lock_holder(&spinlock);
+  size_t actual_size;
+  void* ptr = mmap_alloc->Alloc(kArenaSize, &actual_size, kArenaSize);
+
+  if (ptr == MAP_FAILED) {
+    Log(kLog, __FILE__, __LINE__, "ArenaAlloc:", strerror(errno));
+    return NULL;
+  }
+
+  // Only execute if uffd has been initialized. The following block
+  // registers the freshly allocated range with our uffd handler.
+  if (LIKELY(uffd != -1)) {
+    uffdio_register.range.start = (unsigned long) ptr;
+    uffdio_register.range.len = kArenaSize;
+    uffdio_register.mode = UFFDIO_REGISTER_MODE_MISSING;
+
+    if (ioctl(uffd, UFFDIO_REGISTER, &uffdio_register) == -1)
+      Log(kCrash, __FILE__, __LINE__, "uffdio_register:", strerror(errno));
+  }
+
+  ASSERT(actual_size == kArenaSize);
+  Log(kLog, __FILE__, __LINE__,
+        "ArenaAlloc: Successfully allocated mem", actual_size);
+  // Emulate TCMalloc_SystemAlloc observable behavior
+  TCMalloc_SystemTaken += kArenaSize;
+
+  return ptr;
 }
 
 void* TCMalloc_SystemAlloc(size_t size, size_t *actual_size,

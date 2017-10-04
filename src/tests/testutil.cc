@@ -50,6 +50,7 @@
 // limiting the address-space size we get sufficient coverage without blowing
 // out job limits.
 void SetTestResourceLimit() {
+#if 0 /* Disable resource limiting */
 #ifdef HAVE_SYS_RESOURCE_H
   // The actual resource we need to set varies depending on which flavour of
   // unix.  On Linux we need RLIMIT_AS because that covers the use of mmap.
@@ -73,6 +74,7 @@ void SetTestResourceLimit() {
     }
   }
 #endif  /* HAVE_SYS_RESOURCE_H */
+#endif  /* Disable resource limiting */
 }
 
 
@@ -159,6 +161,8 @@ extern "C" {
 #else  // not NO_THREADS, not !HAVE_PTHREAD, not _WIN32
 
 #include <pthread.h>
+#include <string.h>
+#include <stdio.h>
 
 #define SAFE_PTHREAD(fncall)  do { if ((fncall) != 0) abort(); } while (0)
 
@@ -208,8 +212,13 @@ extern "C" {
     for (int i = 0; i < count; i++) {
       fn_and_ids[i].ptr_to_function = fn;
       fn_and_ids[i].id = i;
-      SAFE_PTHREAD(pthread_create(&thr[i], &attr,
-                                  RunFunctionInThreadWithId, &fn_and_ids[i]));
+      // SAFE_PTHREAD(
+      int s = pthread_create(&thr[i], &attr,
+                             RunFunctionInThreadWithId, &fn_and_ids[i]);// );
+      if (s != 0) {
+        printf("RunManyThreadsWithId(%d): %s\n", i, strerror(s));
+        abort();
+      }
     }
     for (int i = 0; i < count; i++) {
       SAFE_PTHREAD(pthread_join(thr[i], NULL));

@@ -77,8 +77,6 @@ bool ThreadCache::tsd_inited_ = false;
 pthread_key_t ThreadCache::heap_key_;
 
 void ThreadCache::Init(pthread_t tid) {
-  size_ = 0;
-
   max_size_ = 0;
   IncreaseCacheLimitLocked();
   if (max_size_ == 0) {
@@ -99,6 +97,10 @@ void ThreadCache::Init(pthread_t tid) {
     list_[cl].Init();
   }
 
+  known_types = NULL;
+  typed_freelist_map_ = FreeListArrayMap(MetaDataAlloc, 12);
+  freelist_array_allocator_.Init();
+
   uint32_t sampler_seed;
   memcpy(&sampler_seed, &tid, sizeof(sampler_seed));
   sampler_.Init(sampler_seed);
@@ -106,28 +108,44 @@ void ThreadCache::Init(pthread_t tid) {
 
 void ThreadCache::Cleanup() {
   // Put unused memory back into central cache
-  for (int cl = 0; cl < kNumClasses; ++cl) {
-    if (list_[cl].length() > 0) {
-      ReleaseToCentralCache(&list_[cl], cl, list_[cl].length());
+  TypeNode type_node;
+  type_node.type = 0;
+  type_node.next = known_types;
+
+  for (TypeNode *curr = &type_node; curr; curr = curr->next) {
+    for (int cl = 0; cl < kNumClasses; ++cl) {
+      FreeList* list = GetTypedFreeList(cl, curr->type, false /* canCreate */);
+      if (list && list->length() > 0) {
+        ReleaseToCentralCache(list, cl, list->length(), curr->type);
+      }
     }
   }
 }
 
 // Remove some objects of class "cl" from central cache and add to thread heap.
 // On success, return the first object for immediate use; otherwise return NULL.
-void* ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size) {
-  FreeList* list = &list_[cl];
+void*
+ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size, TypeTag type) {
+  FreeList* list = GetTypedFreeList(cl, type, true /* canCreate */);
   ASSERT(list->empty());
   const int batch_size = Static::sizemap()->num_objects_to_move(cl);
 
   const int num_to_move = min<int>(list->max_length(), batch_size);
   void *start, *end;
-  int fetch_count = Static::central_cache()[cl].RemoveRange(
+  int fetch_count = Static::central_cache(type)[cl].RemoveRange(
       &start, &end, num_to_move);
 
+  #ifndef NDEBUG
+    const PageID p = reinterpret_cast<uintptr_t>(start) >> kPageShift;
+    Span *span = Static::pageheap()->GetDescriptor(p);
+    ASSERT(span != NULL && span->type == type);
+    // Log(kLog, __FILE__, __LINE__, "span start is", span->start, "and length is", span->length);
+  #endif
+
   ASSERT((start == NULL) == (fetch_count == 0));
+
   if (--fetch_count >= 0) {
-    size_ += byte_size * fetch_count;
+    list->size_ += byte_size * fetch_count;
     list->PushRange(fetch_count, SLL_Next(start), end);
   }
 
@@ -149,12 +167,13 @@ void* ThreadCache::FetchFromCentralCache(size_t cl, size_t byte_size) {
     ASSERT(new_length % batch_size == 0);
     list->set_max_length(new_length);
   }
+
   return start;
 }
 
-void ThreadCache::ListTooLong(FreeList* list, size_t cl) {
+void ThreadCache::ListTooLong(FreeList* list, size_t cl, TypeTag type) {
   const int batch_size = Static::sizemap()->num_objects_to_move(cl);
-  ReleaseToCentralCache(list, cl, batch_size);
+  ReleaseToCentralCache(list, cl, batch_size, type);
 
   // If the list is too long, we need to transfer some number of
   // objects to the central cache.  Ideally, we would transfer
@@ -177,56 +196,65 @@ void ThreadCache::ListTooLong(FreeList* list, size_t cl) {
 }
 
 // Remove some objects of class "cl" from thread heap and add to central cache
-void ThreadCache::ReleaseToCentralCache(FreeList* src, size_t cl, int N) {
-  ASSERT(src == &list_[cl]);
+void ThreadCache::ReleaseToCentralCache(FreeList* src, size_t cl, int N, TypeTag type) {
+  ASSERT(src == GetTypedFreeList(cl, type, false /* canCreate */));
+
+  if (type && kPageSize % Static::sizemap()->ByteSizeForClass(cl) != 0) {
+    return;                     // Page size must be a multiple of byte size
+  }
+
   if (N > src->length()) N = src->length();
   size_t delta_bytes = N * Static::sizemap()->ByteSizeForClass(cl);
 
   // We return prepackaged chains of the correct size to the central cache.
   // TODO: Use the same format internally in the thread caches?
   int batch_size = Static::sizemap()->num_objects_to_move(cl);
+
   while (N > batch_size) {
     void *tail, *head;
     src->PopRange(batch_size, &head, &tail);
-    Static::central_cache()[cl].InsertRange(head, tail, batch_size);
+    Static::central_cache(type)[cl].InsertRange(head, tail, batch_size);
     N -= batch_size;
   }
   void *tail, *head;
   src->PopRange(N, &head, &tail);
-  Static::central_cache()[cl].InsertRange(head, tail, N);
-  size_ -= delta_bytes;
+  Static::central_cache(type)[cl].InsertRange(head, tail, N);
+  src->size_ -= delta_bytes;
 }
 
 // Release idle memory to the central cache
-void ThreadCache::Scavenge() {
+void ThreadCache::Scavenge(TypeTag type) {
   // If the low-water mark for the free list is L, it means we would
   // not have had to allocate anything from the central cache even if
   // we had reduced the free list size by L.  We aim to get closer to
   // that situation by dropping L/2 nodes from the free list.  This
   // may not release much memory, but if so we will call scavenge again
   // pretty soon and the low-water marks will be high on that call.
-  for (int cl = 0; cl < kNumClasses; cl++) {
-    FreeList* list = &list_[cl];
-    const int lowmark = list->lowwatermark();
-    if (lowmark > 0) {
-      const int drop = (lowmark > 1) ? lowmark/2 : 1;
-      ReleaseToCentralCache(list, cl, drop);
 
-      // Shrink the max length if it isn't used.  Only shrink down to
-      // batch_size -- if the thread was active enough to get the max_length
-      // above batch_size, it will likely be that active again.  If
-      // max_length shinks below batch_size, the thread will have to
-      // go through the slow-start behavior again.  The slow-start is useful
-      // mainly for threads that stay relatively idle for their entire
-      // lifetime.
-      const int batch_size = Static::sizemap()->num_objects_to_move(cl);
-      if (list->max_length() > batch_size) {
-        list->set_max_length(
+    for (int cl = 0; cl < kNumClasses; cl++) {
+      FreeList* list = GetTypedFreeList(cl, type, false /* canCreate */);
+      if (!list) continue;
+
+      const int lowmark = list->lowwatermark();
+      if (lowmark > 0) {
+        const int drop = (lowmark > 1) ? lowmark/2 : 1;
+        ReleaseToCentralCache(list, cl, drop, type);
+
+        // Shrink the max length if it isn't used.  Only shrink down to
+        // batch_size -- if the thread was active enough to get the max_length
+        // above batch_size, it will likely be that active again.  If
+        // max_length shinks below batch_size, the thread will have to
+        // go through the slow-start behavior again.  The slow-start is useful
+        // mainly for threads that stay relatively idle for their entire
+        // lifetime.
+        const int batch_size = Static::sizemap()->num_objects_to_move(cl);
+        if (list->max_length() > batch_size) {
+          list->set_max_length(
             max<int>(list->max_length() - batch_size, batch_size));
+        }
       }
+      list->clear_lowwatermark();
     }
-    list->clear_lowwatermark();
-  }
 
   IncreaseCacheLimit();
 }

@@ -108,7 +108,7 @@ class PERFTOOLS_DLL_DECL PageHeap {
   // Allocate a run of "n" pages.  Returns zero if out of memory.
   // Caller should not pass "n == 0" -- instead, n should have
   // been rounded up already.
-  Span* New(Length n);
+  Span* New(Length n, TypeTag t = 0);
 
   // Delete the span "[p, p+n-1]".
   // REQUIRES: span was returned by earlier call to New() and
@@ -243,9 +243,9 @@ class PERFTOOLS_DLL_DECL PageHeap {
   // Statistics on system, free, and unmapped bytes
   Stats stats_;
 
-  Span* SearchFreeAndLargeLists(Length n);
+  Span* SearchFreeAndLargeLists(Length n, TypeTag t);
 
-  bool GrowHeap(Length n);
+  bool GrowHeap(Length n, TypeTag t);
 
   // REQUIRES: span->length >= n
   // REQUIRES: span->location != IN_USE
@@ -257,15 +257,14 @@ class PERFTOOLS_DLL_DECL PageHeap {
   Span* Carve(Span* span, Length n);
 
   void RecordSpan(Span* span) {
-    pagemap_.set(span->start, span);
-    if (span->length > 1) {
-      pagemap_.set(span->start + span->length - 1, span);
+    for (int i = 0; i < span->length; i++) {
+      pagemap_.set(span->start + i, span);
     }
   }
 
   // Allocate a large span of length == n.  If successful, returns a
   // span of exactly the specified length.  Else, returns NULL.
-  Span* AllocLarge(Length n);
+  Span* AllocLarge(Length n, TypeTag t);
 
   // Coalesce span with neighboring spans if possible, prepend to
   // appropriate free list, and adjust stats.

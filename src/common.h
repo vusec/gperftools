@@ -96,6 +96,12 @@ static const size_t kNumClasses = kBaseClasses + 79 + 32;
 
 static const size_t kMaxThreadCacheSize = 4 << 20;
 
+// Allocate fixed sized spans when we grow the heap. We use 4GB slabs
+// per span. This allows us for simple pointer arithmetic to prevent
+// pointer to escape a span.
+static const size_t kArenaShift = 32;
+static const size_t kArenaSize  = 1l << kArenaShift;
+
 static const size_t kPageSize   = 1 << kPageShift;
 static const size_t kMaxSize    = 256 * 1024 * 2;;
 static const size_t kAlignment  = 8;
@@ -132,6 +138,9 @@ static const int kMaxOverages = 3;
 static const int kMaxDynamicFreeListLength = 8192;
 
 static const Length kMaxValidPages = (~static_cast<Length>(0)) >> kPageShift;
+
+// Amount of AreaRanges to reserve while reading /proc/self/maps.
+static const size_t kMapsBufferSize = 1 << 11;
 
 #if defined __x86_64__
 // All current and planned x86_64 processors only look at the lower 48 bits
@@ -288,6 +297,54 @@ struct StackTrace {
   uintptr_t size;          // Size of object
   uintptr_t depth;         // Number of PC values stored in array below
   void*     stack[kMaxStackDepth];
+};
+
+typedef uintptr_t TypeTag;
+
+template <class T>
+class TypeMap {
+  private:
+  
+    struct node {
+      struct node *next;
+      TypeTag type;
+      T *list;
+    };
+  
+    void *(*allocator_)(size_t);
+    struct node **hashtable_;
+    size_t hashtablesizemask_;
+  public:
+    TypeMap(void *(*allocator)(size_t), int hashtablesizeshift) {
+      allocator_ = allocator;
+      hashtablesizemask_ = (1UL << hashtablesizeshift) - 1;
+      hashtable_ = (struct node **) allocator(sizeof(struct node *) << hashtablesizeshift);
+    }
+    T *get(TypeTag type) const {
+      struct node *node;
+      node = hashtable_[type & hashtablesizemask_];
+      while (node) {
+        if (node->type == type) return node->list;
+	node = node->next;
+      }
+      return NULL;
+    }
+    void set(TypeTag type, T *list) {
+      struct node *node, **node_p;
+      node_p = &hashtable_[type & hashtablesizemask_];
+      while ((node = *node_p)) {
+        if (node->type == type) {
+          node->list = list;
+	  return;
+        }
+	node_p = &node->next;
+      }
+
+      node = *node_p = (struct node *) allocator_(sizeof(struct node));
+      node->next = NULL;
+      node->type = type;
+      node->list = list;
+    }
 };
 
 }  // namespace tcmalloc
