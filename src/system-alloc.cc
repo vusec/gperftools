@@ -501,8 +501,8 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-void check_redzone(void* ptr) __attribute__ ((noinline));
-void check_redzone(void* ptr) {
+extern "C" void __check_redzone(void* ptr) __attribute__ ((noinline));
+extern "C" void __check_redzone(void* ptr) {
   if (is_redzone(ptr))
     Log(kCrash, __FILE__, __LINE__,
         "Memory violation:", ptr, "points to a redzone!");
@@ -670,7 +670,9 @@ static void* uffd_handler_thread(void*) {
   ssize_t                 nread;
   struct pollfd           pollfd;
 
+#ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "Userfault thread started");
+#endif
 
   if(page  == NULL)
     Log(kCrash, __FILE__, __LINE__,
@@ -744,7 +746,9 @@ static void setup_uffd() __attribute__((constructor));
 static void setup_uffd() {
   pthread_t         tid = {0};
   struct uffdio_api uffdio_api;
+#ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "Setting up userfaultfd");
+#endif
 
   /* Create userfault file descriptor */
   if((uffd = syscall(__NR_userfaultfd, 0)) == -1)
@@ -756,12 +760,16 @@ static void setup_uffd() {
   if (ioctl(uffd, UFFDIO_API, &uffdio_api) == -1)
     Log(kCrash, __FILE__, __LINE__, "Couldn't set userfaultfd api");
 
+#ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "uffd: start thread");
+#endif
   if ((errno = pthread_create(&tid, NULL, uffd_handler_thread, NULL)))
     Log(kCrash, __FILE__, __LINE__,
         "Could not create uffd handler thread", strerror(errno));
 
+#ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "uffd: done");
+#endif
 }
 
 
@@ -790,8 +798,6 @@ void *ArenaAlloc() {
   }
 
   ASSERT(actual_size == kArenaSize);
-  Log(kLog, __FILE__, __LINE__,
-        "ArenaAlloc: Successfully allocated mem", actual_size);
   // Emulate TCMalloc_SystemAlloc observable behavior
   TCMalloc_SystemTaken += kArenaSize;
 
