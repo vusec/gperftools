@@ -50,7 +50,7 @@
 #include "system-alloc.h"      // for TCMalloc_SystemAlloc, etc
 
 DEFINE_double(tcmalloc_release_rate,
-              EnvToDouble("TCMALLOC_RELEASE_RATE", 1.0),
+              EnvToDouble("TCMALLOC_RELEASE_RATE", 0.0),
               "Rate at which we release unused memory to the system.  "
               "Zero means we never release memory back to the system.  "
               "Increase this flag to return memory faster; decrease it "

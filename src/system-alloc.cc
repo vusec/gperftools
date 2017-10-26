@@ -148,7 +148,7 @@ DEFINE_bool(malloc_skip_mmap,
             EnvToBool("TCMALLOC_SKIP_MMAP", false),
             "Whether mmap can be used to obtain memory.");
 DEFINE_bool(malloc_disable_memory_release,
-            EnvToBool("TCMALLOC_DISABLE_MEMORY_RELEASE", false),
+            EnvToBool("TCMALLOC_DISABLE_MEMORY_RELEASE", true),
             "Whether MADV_FREE/MADV_DONTNEED should be used"
             " to return unused memory to the system.");
 
