@@ -512,7 +512,13 @@ int is_redzone(void* ptr) {
   const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
   tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
-  // if (span->type == 0) return 0; // TODO(chris): Assume no redzones if typeless?
+  // Ignore if we cannot access span.
+  if (!span) {
+#ifndef NDEBUG
+    Log(kLog, __FILE__, __LINE__, "Cannot verify span at: ", span);
+#endif
+    return 0;
+  }
 
   // Check for large object redzone
   if (span->redzone > 0) {
