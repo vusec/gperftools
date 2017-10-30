@@ -379,7 +379,7 @@ AS_IF([test "x$perftools_cv_have_unwind_backtrace" = xyes],
 
 AS_IF([test "x$enable_backtrace" = xyes],
       [default_emergency_malloc=yes],
-      [default_emergency_malloc=no])
+      [default_emergency_malloc=yes])
 
 AS_IF([test "x$will_use_libunwind" = xyes],
       [AC_COMPILE_IFELSE([AC_LANG_PROGRAM(, [return __arm__])],

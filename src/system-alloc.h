@@ -62,6 +62,8 @@ extern PERFTOOLS_DLL_DECL
 void* TCMalloc_SystemAlloc(size_t bytes, size_t *actual_bytes,
 			   size_t alignment = 0);
 
+extern volatile bool uffd_start;
+
 // Allocate a large single area with padding.
 extern PERFTOOLS_DLL_DECL
 void* ArenaAlloc();

@@ -94,7 +94,8 @@ static const bool kDebugMode = false;
 static const bool kDebugMode = true;
 #endif
 
-static long uffd = -1;
+volatile bool uffd_start = false;
+static long uffd_id = -1;
 
 // TODO(sanjay): Move the code below into the tcmalloc namespace
 using tcmalloc::kLog;
@@ -153,12 +154,6 @@ DEFINE_bool(malloc_disable_memory_release,
             " to return unused memory to the system.");
 
 // Controls for baggy bounds
-DEFINE_int32(baggy_value,
-             EnvToInt("TCMALLOC_BAGGY_VALUE", 42),
-             "Controls the value used for Baggy Bounds check.");
-DEFINE_double(baggy_ratio,
-              EnvToDouble("TCMALLOC_BAGGY_RATIO", .5),
-              "Controls the ratio used for Baggy Bounds check.");
 
 
 // static allocators
@@ -503,9 +498,12 @@ void InitSystemAllocators(void) {
 
 extern "C" void __check_redzone(void* ptr) __attribute__ ((noinline));
 extern "C" void __check_redzone(void* ptr) {
-  if (is_redzone(ptr))
+  const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+  tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
+
+  if (is_redzone(ptr)) {}
     Log(kCrash, __FILE__, __LINE__,
-        "Memory violation:", ptr, "points to a redzone!");
+        "Memory violation:", ptr, "points to a redzone!", span->sizeclass);
 }
 
 int is_redzone(void* ptr) {
@@ -530,7 +528,7 @@ int is_redzone(void* ptr) {
   // Check for small object redzone
   tcmalloc::SizeMap* sm          = tcmalloc::Static::sizemap();
   const ssize_t      object_size = sm->ByteSizeForClass(span->sizeclass);
-  const size_t       cl          = sm->SizeClass(object_size * (1 + FLAGS_baggy_ratio));
+  const size_t       cl          = sm->SizeClass(object_size * (1 + kRedzoneRatio));
   const ssize_t      total_size  = sm->ByteSizeForClass(cl);
   const uintptr_t    base        = span->start << kPageShift;
   const ssize_t      offset      = (uintptr_t)ptr - base;
@@ -544,7 +542,7 @@ static void fill_redzones_pages (tcmalloc::Span *span,
                                  size_t          page_size) {
   Length    shift    = span->length - span->redzone;
   uintptr_t rz_start = (span->start + shift) << kPageShift; // Shift in tcmalloc pages!!
-  int       value    = (real_page >= rz_start) ? FLAGS_baggy_value : 0;
+  int       value    = (real_page >= rz_start) ? kRedzoneValue : 0;
 
   memset((void*)local_page, value, page_size);
 }
@@ -562,7 +560,7 @@ static void fill_redzones_large (tcmalloc::Span *span,
   real_end     = real_page + page_size;
   base         = span->start << kPageShift; // Shift in tcmalloc pages!!
   object_size  = sm->ByteSizeForClass(span->sizeclass);
-  cl           = sm->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
+  cl           = sm->SizeClass(object_size * (kRedzoneRatio + 1));
   total_size   = sm->ByteSizeForClass(cl);
   redzone_size = total_size - object_size;
   object_count = (real_page - base) / total_size;
@@ -592,7 +590,7 @@ static void fill_redzones_large (tcmalloc::Span *span,
       redzone_size = page_size;
   }
 
-  memset((void*)local_page, FLAGS_baggy_value, redzone_size);
+  memset((void*)local_page, kRedzoneValue, redzone_size);
 }
 
 
@@ -609,7 +607,7 @@ static void fill_redzones_small (tcmalloc::Span *span,
 
   /* Calculate the total size (object + redzone) */
   object_size = sm->ByteSizeForClass(span->sizeclass);
-  cl          = sm->SizeClass(object_size * (FLAGS_baggy_ratio + 1));
+  cl          = sm->SizeClass(object_size * (kRedzoneRatio + 1));
   total_size  = sm->ByteSizeForClass(cl);
 
   ASSERT(span->sizeclass > 0 && object_size <= page_size);
@@ -630,14 +628,14 @@ static void fill_redzones_small (tcmalloc::Span *span,
     ASSERT(local_page + (total_size - shift) < local_end);
 
     memset(reinterpret_cast<void*>(local_page),
-           FLAGS_baggy_value,
+           kRedzoneValue,
            total_size - shift);
     local_page += total_size - shift;
   } else if (shift > 0) {
     ASSERT(local_page + redzone_size < local_end);
 
     memset(reinterpret_cast<void*>(local_page + (object_size - shift)),
-           FLAGS_baggy_value,
+           kRedzoneValue,
            redzone_size);
     local_page += (object_size - shift) + redzone_size;
   }
@@ -647,7 +645,7 @@ static void fill_redzones_small (tcmalloc::Span *span,
     ASSERT(local_page + total_size < local_end);
 
     memset(reinterpret_cast<void*>(local_page + object_size),
-           FLAGS_baggy_value,
+           kRedzoneValue,
            redzone_size);
   }
 
@@ -658,7 +656,7 @@ static void fill_redzones_small (tcmalloc::Span *span,
     ASSERT(local_page + (spare - object_size) < local_end);
 
     memset(reinterpret_cast<void*>(local_page + object_size),
-           FLAGS_baggy_value,
+           kRedzoneValue,
            spare - object_size);
   }
 }
@@ -686,14 +684,14 @@ static void* uffd_handler_thread(void*) {
 
   while(1) {
     /* Start pollin' */
-    pollfd.fd = uffd;
+    pollfd.fd = uffd_id;
     pollfd.events = POLLIN;
     if((nready = poll(&pollfd, 1, -1)) == -1)
       Log(kCrash, __FILE__, __LINE__,
           "Poll failed", strerror(errno));
 
     /* Read userfaultfd message */
-    if ((nread = read(uffd, &msg, sizeof(msg))) == 0)
+    if ((nread = read(uffd_id, &msg, sizeof(msg))) == 0)
       Log(kCrash, __FILE__, __LINE__, "EOF on userfaultfd");
     else if (nread == -1)
       Log(kCrash, __FILE__, __LINE__,
@@ -734,7 +732,7 @@ static void* uffd_handler_thread(void*) {
     uffdio_copy.mode = 0;
     uffdio_copy.copy = 0;
 
-    if (ioctl(uffd, UFFDIO_COPY, &uffdio_copy) == -1)
+    if (ioctl(uffd_id, UFFDIO_COPY, &uffdio_copy) == -1)
       Log(kCrash, __FILE__, __LINE__,
           "Failed to copy page in userfaultfd handler");
 
@@ -747,32 +745,31 @@ static void* uffd_handler_thread(void*) {
   return NULL;
 }
 
-// Make sure the thread is started before
-static void setup_uffd() __attribute__((constructor));
 static void setup_uffd() {
-  pthread_t         tid = {0};
+  pthread_t tid = {0};
   struct uffdio_api uffdio_api;
 #ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "Setting up userfaultfd");
 #endif
 
   /* Create userfault file descriptor */
-  if((uffd = syscall(__NR_userfaultfd, 0)) == -1)
+  if((uffd_id = syscall(__NR_userfaultfd, 0)) == -1)
     Log(kCrash, __FILE__, __LINE__, "Userfaultfd call failed");
 
   /* Set userfaultfd api */
   uffdio_api.api      = UFFD_API;
   uffdio_api.features = 0;
-  if (ioctl(uffd, UFFDIO_API, &uffdio_api) == -1)
+  if (ioctl(uffd_id, UFFDIO_API, &uffdio_api) == -1)
     Log(kCrash, __FILE__, __LINE__, "Couldn't set userfaultfd api");
 
 #ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "uffd: start thread");
 #endif
+  uffd_start = true;
   if ((errno = pthread_create(&tid, NULL, uffd_handler_thread, NULL)))
     Log(kCrash, __FILE__, __LINE__,
         "Could not create uffd handler thread", strerror(errno));
-
+  uffd_start = false;
 #ifndef NDEBUG
   Log(kLog, __FILE__, __LINE__, "uffd: done");
 #endif
@@ -782,6 +779,7 @@ static void setup_uffd() {
 void *ArenaAlloc() {
   static MmapSysAllocator *mmap_alloc = new (mmap_space.buf) MmapSysAllocator();
   struct uffdio_register   uffdio_register;
+  // Log(kLog, __FILE__, __LINE__, "ARENA"); // TODO(chris): REMOVE
 
   SpinLockHolder lock_holder(&spinlock);
   size_t actual_size;
@@ -794,14 +792,14 @@ void *ArenaAlloc() {
 
   // Only execute if uffd has been initialized. The following block
   // registers the freshly allocated range with our uffd handler.
-  if (LIKELY(uffd != -1)) {
-    uffdio_register.range.start = (unsigned long) ptr;
-    uffdio_register.range.len = kArenaSize;
-    uffdio_register.mode = UFFDIO_REGISTER_MODE_MISSING;
+  if (UNLIKELY(uffd_id == -1)) setup_uffd();
 
-    if (ioctl(uffd, UFFDIO_REGISTER, &uffdio_register) == -1)
-      Log(kCrash, __FILE__, __LINE__, "uffdio_register:", strerror(errno));
-  }
+  uffdio_register.range.start = (unsigned long) ptr;
+  uffdio_register.range.len = kArenaSize;
+  uffdio_register.mode = UFFDIO_REGISTER_MODE_MISSING;
+
+  if (ioctl(uffd_id, UFFDIO_REGISTER, &uffdio_register) == -1)
+    Log(kCrash, __FILE__, __LINE__, "uffdio_register:", strerror(errno));
 
   ASSERT(actual_size == kArenaSize);
   // Emulate TCMalloc_SystemAlloc observable behavior

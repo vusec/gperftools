@@ -40,7 +40,6 @@
 #include "static_vars.h"       // for Static
 
 #include "base/commandlineflags.h"      // for RegisterFlagValidator, etc
-DECLARE_double(baggy_ratio);
 
 using std::min;
 using std::max;
@@ -326,8 +325,11 @@ int CentralFreeList::FetchFromOneSpans(int N, void **start, void **end) {
 void CentralFreeList::Populate() {
   // Release central list lock while operating on pageheap
   lock_.Unlock();
+  // TODO(chris): Either remove this part (and replace cl with
+  // size_class_) or pass size instead of size_w_redzone to do_malloc_small.
+  // Log(kLog, __FILE__, __LINE__, "Populate", type_, size_class_);
   size_t original_size = Static::sizemap()->class_to_size(size_class_);
-  size_t size_w_redzone = original_size + (original_size * FLAGS_baggy_ratio);
+  size_t size_w_redzone = original_size + (original_size * kRedzoneRatio);
   size_t cl = Static::sizemap()->SizeClass(size_w_redzone);
 
   const size_t npages = Static::sizemap()->class_to_pages(cl);

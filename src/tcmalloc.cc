@@ -170,7 +170,6 @@ using tcmalloc::Static;
 using tcmalloc::ThreadCache;
 
 DECLARE_double(tcmalloc_release_rate);
-DECLARE_double(baggy_ratio);
 
 // For windows, the printf we use to report large allocs is
 // potentially dangerous: it could cause a malloc that would cause an
@@ -1158,15 +1157,15 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
   bool report_large;
 
   Length
-    num_pages = tcmalloc::pages(size * (1 + FLAGS_baggy_ratio)),
+    num_pages = tcmalloc::pages(size * (1 + kRedzoneRatio)),
     redzone_pages = 0;
   // If size too big, do not create redzones
   if (UNLIKELY(num_pages == 0)) {
     num_pages = tcmalloc::pages(size);
   } else {
-    redzone_pages = tcmalloc::pages(size * FLAGS_baggy_ratio);
+    redzone_pages = tcmalloc::pages(size * kRedzoneRatio);
     ASSERT(num_pages == tcmalloc::pages(size) + redzone_pages);
-    size *= 1 + FLAGS_baggy_ratio;
+    size *= 1 + kRedzoneRatio;
   }
 
   // NOTE: we're passing original size here as opposed to rounded-up
@@ -1210,26 +1209,36 @@ ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type
 }
 
 ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type) {
+  // Fast path for allocations during uffd thread startup
+  if (uffd_start) return tcmalloc::EmergencyMalloc(size);
+
+ // Side-effect: init static variables
+  ThreadCache *tcache = ThreadCache::GetCache();
+
   size_t cl, object_size, size_w_redzone = size;
   if (size <= kMaxSize) {
     cl = Static::sizemap()->SizeClass(size);
     object_size = Static::sizemap()->class_to_size(cl);
-    size_w_redzone = object_size + (object_size * FLAGS_baggy_ratio);
+    size_w_redzone = object_size + (object_size * kRedzoneRatio);
   }
 
-  if (ThreadCache::have_tls) {
+  if (false && ThreadCache::have_tls) {
     if (LIKELY(size_w_redzone < ThreadCache::MinSizeForSlowPath())) {
-      return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size, type);
+      return do_malloc_small(ThreadCache::GetCacheWhichMustBePresent(), size_w_redzone, type);
     }
     if (UNLIKELY(ThreadCache::IsUseEmergencyMalloc())) {
       return tcmalloc::EmergencyMalloc(size); // TODO(chris): implement for EmergencyMalloc
     }
   }
 
+  // We're passing size instead of size_w_redzone. This will be
+  // calculated by the filling logic and
+  // CentralFreelist::Populate. Thus, the original size will be
+  // preserved.
   if (size_w_redzone <= kMaxSize) {
-    return do_malloc_small(ThreadCache::GetCache(), size, type);
+    return do_malloc_small(tcache, size, type);
   } else {
-    return do_malloc_pages(ThreadCache::GetCache(), size, type);
+    return do_malloc_pages(tcache, size, type);
   }
 }
 
@@ -1502,7 +1511,7 @@ void* do_memalign(size_t align, size_t size, TypeTag type) {
   }
 
   // Calculate number of redzone pages needed.
-  Length redzone_pages = tcmalloc::pages(size * FLAGS_baggy_ratio);
+  Length redzone_pages = tcmalloc::pages(size * kRedzoneRatio);
 
   // We will allocate directly from the page heap
   SpinLockHolder h(Static::pageheap_lock());
