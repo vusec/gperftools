@@ -641,8 +641,8 @@ static void fill_redzones_small (tcmalloc::Span *span,
   }
 
   /* After correction for the first object, fill the rest of the redzones. */
-  for (; local_page + total_size < local_end; local_page += total_size) {
-    ASSERT(local_page + total_size < local_end);
+  for (; local_page + total_size <= local_end; local_page += total_size) {
+    ASSERT(local_page + total_size <= local_end);
 
     memset(reinterpret_cast<void*>(local_page + object_size),
            kRedzoneValue,
