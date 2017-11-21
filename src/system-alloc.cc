@@ -501,9 +501,10 @@ extern "C" void __check_redzone(void* ptr) {
   const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
   tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
-  if (is_redzone(ptr)) {}
+  if (is_redzone(ptr)) {
     Log(kCrash, __FILE__, __LINE__,
         "Memory violation:", ptr, "points to a redzone!", span->sizeclass);
+  }
 }
 
 int is_redzone(void* ptr) {
