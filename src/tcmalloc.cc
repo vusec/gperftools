@@ -1163,7 +1163,8 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
   if (UNLIKELY(num_pages == 0)) {
     num_pages = tcmalloc::pages(size);
   } else {
-    redzone_pages = tcmalloc::pages(size * kRedzoneRatio);
+    redzone_pages = num_pages - tcmalloc::pages(size);
+    ASSERT(redzone_pages > 0);
     ASSERT(num_pages == tcmalloc::pages(size) + redzone_pages);
     size *= 1 + kRedzoneRatio;
   }
