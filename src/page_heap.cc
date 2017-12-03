@@ -319,14 +319,20 @@ void PageHeap::Delete(Span* span) {
   span->sizeclass = 0;
   span->sample = 0;
   span->location = Span::ON_NORMAL_FREELIST;
-  Event(span, 'D', span->length);
-  MergeIntoFreeList(span);  // Coalesces if possible
-  IncrementalScavenge(n);
-  ASSERT(stats_.unmapped_bytes+ stats_.committed_bytes==stats_.system_bytes);
-  ASSERT(Check());
+
+  // TODO(chris): Ignoring redzoned spans for now (do something more
+  // sensible). Even necessary?
+  if (span->redzone == 0) {
+    Event(span, 'D', span->length);
+    MergeIntoFreeList(span);  // Coalesces if possible
+    IncrementalScavenge(n);
+    ASSERT(stats_.unmapped_bytes+ stats_.committed_bytes==stats_.system_bytes);
+    ASSERT(Check());
+  }
 }
 
 bool PageHeap::MayMergeSpans(Span *span, Span *other) {
+  return false;
   // If either span or other is typed and do not have the same type,
   // then the spans may not merge.
   if ((span->type != 0 || other->type != 0) && span->type != other->type)

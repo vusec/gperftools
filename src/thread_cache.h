@@ -472,7 +472,7 @@ inline void ThreadCache::Deallocate(void* ptr, size_t cl) {
   // There are two relatively uncommon things that require further work.
   // In the common case we're done, and in that case we need a single branch
   // because of the bitwise-or trick that follows.
-  if (UNLIKELY((list_headroom | size_headroom) < 0)) {
+  if (UNLIKELY((list_headroom | size_headroom) < 0) && false) {
     if (list_headroom < 0) {
       ListTooLong(list, cl, span->type);
     }
