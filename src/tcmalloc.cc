@@ -1405,7 +1405,7 @@ inline size_t GetSizeWithCallback(const void* ptr,
       Static::pageheap()->CacheSizeClass(p, span->sizeclass);
       return Static::sizemap()->ByteSizeForClass(span->sizeclass);
     } else {
-      return span->length << kPageShift;
+      return (span->length - span->redzone) << kPageShift;
     }
   }
 }
