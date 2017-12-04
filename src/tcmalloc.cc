@@ -91,6 +91,7 @@
 #include <gperftools/tcmalloc.h>
 #include <gperftools/typed_tcmalloc.h> // for TypeTag.
 
+#include <fstream>              // for ofstream
 #include <errno.h>                      // for ENOMEM, EINVAL, errno
 #if defined HAVE_STDINT_H
 #include <stdint.h>
@@ -195,6 +196,10 @@ DEFINE_int64(tcmalloc_large_alloc_report_threshold,
              "is very large and therefore you should see no extra "
              "logging unless the flag is overridden.  Set to 0 to "
              "disable reporting entirely.");
+
+DEFINE_bool(write_counters,
+            EnvToBool("TCMALLOC_WRITE_COUNTERS", false),
+            "Write counters to counters.txt.");
 
 
 // We already declared these functions in tcmalloc.h, but we have to
@@ -305,6 +310,49 @@ struct TCMallocStats {
   uint64_t metadata_bytes;    // Bytes alloced for metadata
   PageHeap::Stats pageheap;   // Stats from page heap
 };
+
+struct TCMallocCounters {
+  uint64_t malloc;
+  uint64_t malloc_small;
+  uint64_t malloc_large;
+  uint64_t calloc;
+  uint64_t realloc;
+  uint64_t pvalloc;
+  uint64_t valloc;
+  uint64_t posix_memalign;
+  uint64_t memalign;
+  uint64_t free;
+  uint64_t free_sized;
+  uint64_t new_;
+  uint64_t memcpy;
+};
+
+static TCMallocCounters tcmalloc_counters = {0};
+
+#define IncrCounter(c) (tcmalloc_counters.c++)
+
+__attribute__((destructor))
+static void writeCounter() {
+  if (!FLAGS_write_counters) return;
+
+  std::ofstream out("counters.txt");
+
+  out << "malloc:" << tcmalloc_counters.malloc << std::endl;
+  out << "malloc_small:" << tcmalloc_counters.malloc_small << std::endl;
+  out << "malloc_large:" << tcmalloc_counters.malloc_large << std::endl;
+  out << "calloc:" << tcmalloc_counters.calloc << std::endl;
+  out << "realloc:" << tcmalloc_counters.realloc << std::endl;
+  out << "pvalloc:" << tcmalloc_counters.pvalloc << std::endl;
+  out << "valloc:" << tcmalloc_counters.valloc << std::endl;
+  out << "posix_memalign:" << tcmalloc_counters.posix_memalign << std::endl;
+  out << "memalign:" << tcmalloc_counters.memalign << std::endl;
+  out << "free:" << tcmalloc_counters.free << std::endl;
+  out << "free_sized:" << tcmalloc_counters.free_sized << std::endl;
+  out << "new:" << tcmalloc_counters.new_ << std::endl;
+  out << "memcpy:" << tcmalloc_counters.memcpy << std::endl;
+
+  out.close();
+}
 
 // Get stats into "r".  Also, if class_count != NULL, class_count[k]
 // will be set to the total number of objects of size class k in the
@@ -1153,6 +1201,7 @@ inline bool should_report_large(Length num_pages) {
 
 // Helper for do_malloc().
 inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
+  IncrCounter(malloc_large);
   void* result;
   bool report_large;
 
@@ -1195,6 +1244,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
 }
 
 ALWAYS_INLINE void* do_malloc_small(ThreadCache* heap, size_t size, TypeTag type) {
+  IncrCounter(malloc_small);
   ASSERT(Static::IsInited());
   ASSERT(heap != NULL);
   size_t cl = Static::sizemap()->SizeClass(size);
@@ -1443,6 +1493,7 @@ ALWAYS_INLINE void* do_realloc_with_callback(
       return NULL;
     }
     MallocHook::InvokeNewHook(new_ptr, new_size);
+    IncrCounter(memcpy);
     memcpy(new_ptr, old_ptr, ((old_size < new_size) ? old_size : new_size));
     MallocHook::InvokeDeleteHook(old_ptr);
     // We could use a variant of do_free() that leverages the fact
@@ -1459,6 +1510,7 @@ ALWAYS_INLINE void* do_realloc_with_callback(
 }
 
 ALWAYS_INLINE void* do_typed_realloc(void* old_ptr, size_t new_size, TypeTag type) {
+  IncrCounter(realloc);
   return do_realloc_with_callback(old_ptr, new_size,
                                   &InvalidFree, &InvalidGetSizeForRealloc,
 				  type);
@@ -1655,6 +1707,7 @@ extern "C" PERFTOOLS_DLL_DECL int tc_set_new_mode(int flag) PERFTOOLS_THROW {
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_typed_malloc(size_t size, TypeTag type)
   PERFTOOLS_THROW {
+  IncrCounter(malloc);
   void* result = do_malloc_or_cpp_alloc(size, type);
 
   MallocHook::InvokeNewHook(result, size);
@@ -1674,11 +1727,13 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_malloc(size_t size) PERFTOOLS_THROW {
 }
 
 extern "C" PERFTOOLS_DLL_DECL void tc_free(void* ptr) PERFTOOLS_THROW {
+  IncrCounter(free);
   MallocHook::InvokeDeleteHook(ptr);
   do_free(ptr);
 }
 
 extern "C" PERFTOOLS_DLL_DECL void tc_free_sized(void *ptr, size_t size) PERFTOOLS_THROW {
+  IncrCounter(free_sized);
   if ((reinterpret_cast<uintptr_t>(ptr) & (kPageSize-1)) == 0) {
     tc_free(ptr);
     return;
@@ -1709,6 +1764,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_typed_calloc(size_t n,
                                                     size_t elem_size,
 						    TypeTag type)
 						    PERFTOOLS_THROW {
+  IncrCounter(calloc);
   if (ThreadCache::IsUseEmergencyMalloc()) {
     return tcmalloc::EmergencyCalloc(n, elem_size);
   }
@@ -1741,6 +1797,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_typed_realloc(void* old_ptr,
                                                      size_t new_size,
 						     TypeTag type)
 						     PERFTOOLS_THROW {
+  IncrCounter(realloc);
   if (old_ptr == NULL) {
     void* result = do_malloc_or_cpp_alloc(new_size, type);
     MallocHook::InvokeNewHook(result, new_size);
@@ -1776,6 +1833,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_realloc(void* old_ptr,
 }
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_typed_new(size_t size, TypeTag type) {
+  IncrCounter(new_);
   void* p = cpp_typed_alloc(size, false, type);
   // We keep this next instruction out of cpp_alloc for a reason: when
   // it's in, and new just calls cpp_alloc, the optimizer may fold the
@@ -1877,6 +1935,7 @@ TC_ALIAS(tc_free);
 extern "C" PERFTOOLS_DLL_DECL void* tc_typed_memalign(size_t align,
                                                 size_t size,
                                                 TypeTag type) PERFTOOLS_THROW {
+  IncrCounter(memalign);
   void* result = do_memalign_or_cpp_memalign(align, size, type);
   MallocHook::InvokeNewHook(result, size);
   return result;
@@ -1890,6 +1949,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_memalign(size_t align,
 
 extern "C" PERFTOOLS_DLL_DECL int tc_typed_posix_memalign(
     void** result_ptr, size_t align, size_t size, TypeTag type) PERFTOOLS_THROW {
+  IncrCounter(posix_memalign);
   if (((align % sizeof(void*)) != 0) ||
       ((align & (align - 1)) != 0) ||
       (align == 0)) {
@@ -1916,6 +1976,7 @@ static size_t pagesize = 0;
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_typed_valloc(size_t size,
                                                     TypeTag type) PERFTOOLS_THROW {
+  IncrCounter(valloc);
   // Allocate page-aligned object of length >= size bytes
   if (pagesize == 0) pagesize = getpagesize();
   void* result = do_memalign_or_cpp_memalign(pagesize, size, type);
@@ -1930,6 +1991,7 @@ extern "C" PERFTOOLS_DLL_DECL void* tc_valloc(size_t size) PERFTOOLS_THROW {
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_typed_pvalloc(size_t size,
                                                      TypeTag type) PERFTOOLS_THROW {
+  IncrCounter(pvalloc);
   // Round up size to a multiple of pagesize
   if (pagesize == 0) pagesize = getpagesize();
   if (size == 0) {     // pvalloc(0) should allocate one page, according to
