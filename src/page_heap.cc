@@ -328,6 +328,11 @@ void PageHeap::Delete(Span* span) {
     IncrementalScavenge(n);
     ASSERT(stats_.unmapped_bytes+ stats_.committed_bytes==stats_.system_bytes);
     ASSERT(Check());
+  } else {
+    void   *start  = reinterpret_cast<void*>(span->start << kPageShift);
+    size_t  length = span->length << kPageShift;
+    DeleteSpan(span);
+    munmap(start, length);      // Release directly to system
   }
 }
 
