@@ -496,12 +496,24 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-extern "C" void __check_redzone(void* ptr) __attribute__ ((noinline));
-extern "C" void __check_redzone(void* ptr) {
+extern "C" void __check_redzone(void* ptr, uint64_t size) __attribute__ ((noinline));
+extern "C" void __check_redzone(void* ptr, uint64_t size) {
   const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
   tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
-  if (is_redzone(ptr)) {
+  // If size is greater than 1 (mem intrinsics), assume ptr points to
+  // begin of object.
+  if (span && size > 1) {
+    tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
+    Length obj_size = (span->redzone > 0)
+                    ? (span->length - span->redzone) << kPageShift
+                    : sm->ByteSizeForClass(span->sizeclass);
+    // Large allocs
+    if (size > obj_size) {
+    Log(kCrash, __FILE__, __LINE__,
+        "Memory violation:", ptr, "points to a redzone! (memintrinsic)");
+    }
+  } else if (is_redzone(ptr)) {
     Log(kCrash, __FILE__, __LINE__,
         "Memory violation:", ptr, "points to a redzone!", span->sizeclass);
   }
