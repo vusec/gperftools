@@ -513,7 +513,7 @@ extern "C" void __check_redzone(void* ptr, uint64_t size) {
     Log(kCrash, __FILE__, __LINE__,
         "Memory violation:", ptr, "points to a redzone! (memintrinsic)");
     }
-  } else if (is_redzone(ptr)) {
+  } else if (size > 0 && is_redzone(ptr)) {
     Log(kCrash, __FILE__, __LINE__,
         "Memory violation:", ptr, "points to a redzone!", span->sizeclass);
   }
