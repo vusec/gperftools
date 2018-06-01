@@ -65,6 +65,7 @@
 #include "common.h"
 #include "internal_logging.h"
 #include "static_vars.h"       // for Static
+#include "redzone-check.h"     // for __check_redzone
 
 // On systems (like freebsd) that don't define MAP_ANONYMOUS, use the old
 // form of the name instead.
@@ -496,7 +497,6 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-extern "C" void __check_redzone(void* ptr, uint64_t size) __attribute__ ((noinline));
 extern "C" void __check_redzone(void* ptr, uint64_t size) {
   const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
   tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
