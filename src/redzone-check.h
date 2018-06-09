@@ -9,8 +9,11 @@
 extern "C" {
 #endif
 
-// Slow path for redzone checks, implemented in system-alloc.c.
-void __check_redzone(void* ptr, uint64_t size) __attribute__ ((noinline));
+// Slow path for single-byte redzone checks, implemented in system-alloc.c.
+void __check_redzone(void* ptr) __attribute__((noinline));
+
+// Slow path for multi-byte redzone checks, implemented in system-alloc.c.
+void __check_redzone_multi(void* ptr, uint64_t size) __attribute__((noinline));
 
 #ifdef __cplusplus
 }

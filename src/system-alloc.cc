@@ -497,23 +497,41 @@ void InitSystemAllocators(void) {
   sys_alloc = tc_get_sysalloc_override(sdef);
 }
 
-extern "C" void __check_redzone(void* ptr, uint64_t size) {
-  const PageID       p  = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
-  tcmalloc::Span*    span  = tcmalloc::Static::pageheap()->GetDescriptor(p);
+extern "C" void __check_redzone(void* ptr) {
+  if (is_redzone(ptr)) {
+    const PageID p = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+    tcmalloc::Span* span = tcmalloc::Static::pageheap()->GetDescriptor(p);
+    Log(kCrash, __FILE__, __LINE__,
+        "Memory violation:", ptr, "points to a redzone!", span->sizeclass);
+  }
+}
 
+extern "C" void __check_redzone_multi(void* ptr, uint64_t size) {
   // If size is greater than 1 (mem intrinsics), assume ptr points to
   // begin of object.
-  if (span && size > 1) {
-    tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
-    Length obj_size = (span->redzone > 0)
-                    ? (span->length - span->redzone) << kPageShift
-                    : sm->ByteSizeForClass(span->sizeclass);
-    // Large allocs
-    if (size > obj_size) {
-    Log(kCrash, __FILE__, __LINE__,
-        "Memory violation:", ptr, "points to a redzone! (memintrinsic)");
+  if (size > 1) {
+    const PageID p = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+    tcmalloc::Span* span = tcmalloc::Static::pageheap()->GetDescriptor(p);
+
+    if (span) {
+      tcmalloc::SizeMap* sm = tcmalloc::Static::sizemap();
+      Length obj_size = (span->redzone > 0)
+                      ? (span->length - span->redzone) << kPageShift
+                      : sm->ByteSizeForClass(span->sizeclass);
+      // Large allocs
+      if (size > obj_size) {
+        Log(kCrash, __FILE__, __LINE__,
+            "Memory violation:", ptr, "points to a redzone! (memintrinsic)");
+      }
+
+      return;
     }
-  } else if (size > 0 && is_redzone(ptr)) {
+  }
+
+  // Assume size == 1 (must be enforced by runtime lib that calls this helper)
+  if (is_redzone(ptr)) {
+    const PageID p = reinterpret_cast<uintptr_t>(ptr) >> kPageShift;
+    tcmalloc::Span* span = tcmalloc::Static::pageheap()->GetDescriptor(p);
     Log(kCrash, __FILE__, __LINE__,
         "Memory violation:", ptr, "points to a redzone!", span->sizeclass);
   }
