@@ -96,12 +96,18 @@ static const size_t kNumClasses = kBaseClasses + 79 + 32;
 
 static const size_t kMaxThreadCacheSize = 4 << 20;
 
+// Use a default redzone value of 42, but make it configurable through
+// ./configure CPPFLAGS=-DREDZONE_VALUE=...
+#ifndef REDZONE_VALUE
+# define REDZONE_VALUE 42
+#endif
+
 // Allocate fixed sized spans when we grow the heap. We use 4GB slabs
 // per span. This allows us for simple pointer arithmetic to prevent
 // pointer to escape a span.
 static const size_t kArenaShift   = 32;
 static const size_t kArenaSize    = 1l << kArenaShift;
-static const char   kRedzoneValue = 42;
+static const char   kRedzoneValue = REDZONE_VALUE;
 static const double kRedzoneRatio = 0.5;
 
 static const size_t kPageSize   = 1 << kPageShift;
