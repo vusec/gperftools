@@ -559,7 +559,7 @@ int is_redzone(void* ptr) {
   // Check for small object redzone
   tcmalloc::SizeMap* sm          = tcmalloc::Static::sizemap();
   const ssize_t      object_size = sm->ByteSizeForClass(span->sizeclass);
-  const size_t       cl          = sm->SizeClass(object_size * (1 + kRedzoneRatio));
+  const size_t       cl          = sm->SizeClass(object_size + kRedzoneSize);
   const ssize_t      total_size  = sm->ByteSizeForClass(cl);
   const uintptr_t    base        = span->start << kPageShift;
   const ssize_t      offset      = (uintptr_t)ptr - base;
@@ -591,7 +591,7 @@ static void fill_redzones_large (tcmalloc::Span *span,
   real_end     = real_page + page_size;
   base         = span->start << kPageShift; // Shift in tcmalloc pages!!
   object_size  = sm->ByteSizeForClass(span->sizeclass);
-  cl           = sm->SizeClass(object_size * (kRedzoneRatio + 1));
+  cl           = sm->SizeClass(object_size + kRedzoneSize);
   total_size   = sm->ByteSizeForClass(cl);
   redzone_size = total_size - object_size;
   object_count = (real_page - base) / total_size;
@@ -638,7 +638,7 @@ static void fill_redzones_small (tcmalloc::Span *span,
 
   /* Calculate the total size (object + redzone) */
   object_size = sm->ByteSizeForClass(span->sizeclass);
-  cl          = sm->SizeClass(object_size * (kRedzoneRatio + 1));
+  cl          = sm->SizeClass(object_size + kRedzoneSize);
   total_size  = sm->ByteSizeForClass(cl);
 
   ASSERT(span->sizeclass > 0 && object_size <= page_size);

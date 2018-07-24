@@ -1206,7 +1206,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
   bool report_large;
 
   Length
-    num_pages = tcmalloc::pages(size * (1 + kRedzoneRatio)),
+    num_pages = tcmalloc::pages(size + kRedzoneSize),
     redzone_pages = 0;
   // If size too big, do not create redzones
   if (UNLIKELY(num_pages == 0)) {
@@ -1215,7 +1215,7 @@ inline void* do_malloc_pages(ThreadCache* heap, size_t size, TypeTag type) {
     redzone_pages = num_pages - tcmalloc::pages(size);
     ASSERT(redzone_pages > 0);
     ASSERT(num_pages == tcmalloc::pages(size) + redzone_pages);
-    size *= 1 + kRedzoneRatio;
+    size += kRedzoneSize;
   }
 
   // NOTE: we're passing original size here as opposed to rounded-up
@@ -1270,7 +1270,7 @@ ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type) {
   if (size <= kMaxSize) {
     cl = Static::sizemap()->SizeClass(size);
     object_size = Static::sizemap()->class_to_size(cl);
-    size_w_redzone = object_size + (object_size * kRedzoneRatio);
+    size_w_redzone = object_size + kRedzoneSize;
   }
 
   if (false && ThreadCache::have_tls) {
@@ -1564,7 +1564,7 @@ void* do_memalign(size_t align, size_t size, TypeTag type) {
   }
 
   // Calculate number of redzone pages needed.
-  Length redzone_pages = tcmalloc::pages(size * kRedzoneRatio);
+  Length redzone_pages = tcmalloc::pages(kRedzoneSize);
 
   // We will allocate directly from the page heap
   SpinLockHolder h(Static::pageheap_lock());

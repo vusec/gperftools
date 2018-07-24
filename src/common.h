@@ -96,8 +96,11 @@ static const size_t kNumClasses = kBaseClasses + 79 + 32;
 
 static const size_t kMaxThreadCacheSize = 4 << 20;
 
-// Use a default redzone value of 42, but make it configurable through
-// ./configure CPPFLAGS=-DREDZONE_VALUE=...
+// Use a default redzone size of 8 and a guard pattern of 42, but make them configurable through
+// ./configure "CPPFLAGS=-DREDZONE_SIZE=... -DREDZONE_VALUE=..."
+#ifndef REDZONE_SIZE
+# define REDZONE_SIZE 8
+#endif
 #ifndef REDZONE_VALUE
 # define REDZONE_VALUE 42
 #endif
@@ -107,8 +110,8 @@ static const size_t kMaxThreadCacheSize = 4 << 20;
 // pointer to escape a span.
 static const size_t kArenaShift   = 32;
 static const size_t kArenaSize    = 1l << kArenaShift;
+static const size_t kRedzoneSize  = REDZONE_SIZE;
 static const char   kRedzoneValue = REDZONE_VALUE;
-static const double kRedzoneRatio = 0.5;
 
 static const size_t kPageSize   = 1 << kPageShift;
 static const size_t kMaxSize    = 256 * 1024 * 2;;
