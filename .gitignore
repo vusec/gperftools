@@ -145,3 +145,5 @@
 /thread_dealloc_unittest.exe
 /unwind_bench
 /unwind_bench.exe
+INSTALL
+*.swp
