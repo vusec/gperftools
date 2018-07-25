@@ -1287,9 +1287,9 @@ ALWAYS_INLINE void* do_typed_malloc(size_t size, TypeTag type) {
   // CentralFreelist::Populate. Thus, the original size will be
   // preserved.
   if (size_w_redzone <= kMaxSize) {
-    return do_malloc_small(tcache, size, type);
+    return do_malloc_small(tcache, size_w_redzone, type);
   } else {
-    return do_malloc_pages(tcache, size, type);
+    return do_malloc_pages(tcache, size_w_redzone, type);
   }
 }
 
