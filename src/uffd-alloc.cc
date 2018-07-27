@@ -3,7 +3,9 @@
 
 #ifdef UFFD_SYS_ALLOC
 
-#define _GNU_SOURCE
+#ifndef _GNU_SOURCE
+# define _GNU_SOURCE
+#endif
 #include <unistd.h>             // for syscall, sysconf
 #include <sys/syscall.h>        // for __NR_userfaultfd
 #include <sys/mman.h>           // for mmap, munmap, MADV_DONTNEED, etc
@@ -21,68 +23,68 @@
 #include "thread_cache.h"       // for ThreadCache
 #include "uffd-alloc.h"         // for tcmalloc_uffd::SystemAlloc
 
+using namespace tcmalloc;
+
 namespace tcmalloc_uffd {
 
-using tcmalloc::kLog;
-using tcmalloc::kCrash;
-using tcmalloc::ThreadCache;
-
 #define llog(level, ...) Log((level), __FILE__, __LINE__, __VA_ARGS__)
+#define lperror(msg) llog(kCrash, msg ":", strerror(errno))
 
-#define check_pthread(call, errmsg)                             \
-  do {                                                          \
-    int ret = (call);                                           \
-    if (ret < 0)                                                \
-      Log(kCrash, __FILE__, __LINE__, (errmsg), strerror(ret)); \
+#define check_pthread(call, errmsg)                               \
+  do {                                                            \
+    int ret = (call);                                             \
+    if (ret < 0)                                                  \
+      Log(kCrash, __FILE__, __LINE__, errmsg ":", strerror(ret)); \
   } while(0)
 
 static int uffd = -1;
 
 static void *uffd_poller_thread(void*) {
-  struct pollfd pollfd = { .fd = uffd, .events = POLLIN };
-  struct uffd_msg msg;
-  int nready, nread;
-
-  llog(kLog, "uffd: start polling");
-
   // note: we use kPageSize (default 8K) as a unit of copying here instead of
   // the system page size. Although this is typically 2 system pages, it does
   // not matter for the filling logic.
+
+  llog(kLog, "uffd: start polling");
 
   // Allocate zeroed page to copy later.
   // TODO: create pool of pages per size class with pre-filled redzones
   char *zeropage = (char*)mmap(NULL, kPageSize, PROT_READ | PROT_WRITE,
                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (zeropage == MAP_FAILED)
-    llog(kCrash, "mmap of zeropage failed:", strerror(errno));
+    lperror("mmap of zeropage failed");
 
   while (1) {
     // Wait for message. We don't use a timeout, the thread just ends when the
     // main program ends.
-    if ((nready = poll(&pollfd, 1, -1)) < 0)
-      llog(kCrash, "poll:", strerror(errno));
+    struct pollfd pollfd = { .fd = uffd, .events = POLLIN };
+    int nready = poll(&pollfd, 1, -1);
+    if (nready < 0)
+      lperror("poll");
     ASSERT(nready == 1);
     ASSERT(pollfd.revents & POLLIN);
 
     // Read message; We only expect page faults.
-    if ((nread = read(uffd, &msg, sizeof (msg))) < 0)
-      llog(kCrash, "read on uffd:", strerror(errno));
+    struct uffd_msg msg;
+    int nread = read(uffd, &msg, sizeof (msg));
+    if (nread < 0)
+      lperror("read on uffd");
     ASSERT(nread == sizeof (msg));
     if (msg.event != UFFD_EVENT_PAGEFAULT)
       llog(kCrash, "received non-pagefault uffd event");
 
-    // Look up corresponding span.
+    // Look up corresponding sizeclass through the span. For large allocations,
+    // only the first and last page in the span are mapped, so accesses within
+    // the allocation do not have an associated span but the sizeclass is known
+    // to be 0.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
-    tcmalloc::Span *span = tcmalloc::Static::pageheap()->GetDescriptor(p);
-    uintptr_t pfpage = p << kPageShift;
-    //uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
-
-    // Print page fault address, span ID and object size.
-    llog(kLog, "uffd: page fault", (void*)msg.arg.pagefault.address, p, span->sizeclass);
+    Span *span = Static::pageheap()->GetDescriptor(p);
+    unsigned int cl = span ? span->sizeclass : 0;
+    llog(kLog, "uffd: page fault", (void*)msg.arg.pagefault.address, p, cl);
 
     // TODO: Fill redzones
 
     // Copy pre-filled redzone page to target page.
+    uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
     struct uffdio_copy copy = {
       .dst = pfpage,
       .src = reinterpret_cast<uintptr_t>(zeropage),
@@ -90,8 +92,10 @@ static void *uffd_poller_thread(void*) {
       .mode = 0
     };
     if (ioctl(uffd, UFFDIO_COPY, &copy) < 0)
-      llog(kCrash, "could not copy pre-filled uffd page:", strerror(-copy.copy));
+      lperror("could not copy pre-filled uffd page");
     ASSERT((size_t)copy.copy == kPageSize);
+
+    llog(kLog, "uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + kPageSize));
   }
 
   return NULL;
@@ -109,12 +113,13 @@ void initialize() {
   // Check ioctl features.
   struct uffdio_api api = { .api = UFFD_API, .features = 0 };
   if (ioctl(uffd, UFFDIO_API, &api) < 0)
-    llog(kCrash, "couldn't set userfaultfd api:", strerror(errno));
+    lperror("couldn't set userfaultfd api");
   if (!(api.ioctls & (1 << _UFFDIO_REGISTER)))
     llog(kCrash, "userfaultfd REGISTER operation not supported");
 
   // Poll file descriptor from helper thread. pthread_create allocates a stack
   // for the poller thread, which should use emergencyMalloc to avoid deadlock.
+  // XXX would be nice to register pthread_join with atexit
   ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
   cache.SetUseEmergencyMalloc();
   pthread_t tid;
@@ -132,26 +137,31 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
 
   // Just wrap TCMalloc_SystemAlloc and register the allocated memory range for
   // page faults.
-  void *ptr = ::TCMalloc_SystemAlloc(size, actual_size, alignment);
+  void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
 
-  struct uffdio_register argp = {
+  struct uffdio_register reg = {
     .range = {
       .start = reinterpret_cast<__u64>(ptr),
       .len = *actual_size
     },
     .mode = UFFDIO_REGISTER_MODE_MISSING
   };
-  if (ioctl(uffd, UFFDIO_REGISTER, &argp) < 0)
-    llog(kCrash, "could not register page for userfaultfd:", strerror(errno));
+  if (ioctl(uffd, UFFDIO_REGISTER, &reg) < 0)
+    lperror("could not register pages for userfaultfd");
 
-  llog(kLog, "uffd: registered", *actual_size, "bytes at", ptr);
+  llog(kLog, "uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
+
+  if (!(reg.ioctls & (1 << _UFFDIO_COPY)))
+    llog(kCrash, "UFFDIO_COPY operation not supported on registered range");
 
   return ptr;
 }
 
 } // end namespace tcmalloc_uffd
 
-#endif // UFFD_SYS_ALLOC
-
 // placeholder for pass
-extern "C" void __check_redzone(void* ptr) {}
+extern "C" void __check_redzone(void* ptr) {
+  llog(kLog, "check redzone at", ptr);
+}
+
+#endif // UFFD_SYS_ALLOC
