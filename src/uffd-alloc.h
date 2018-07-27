@@ -13,6 +13,9 @@
 namespace tcmalloc_uffd {
   extern PERFTOOLS_DLL_DECL
   void *SystemAlloc(size_t bytes, size_t *actual_bytes, size_t alignment = 0);
+
+  extern PERFTOOLS_DLL_DECL
+  bool SystemRelease(void *start, size_t length);
 }
 
 #endif /* UFFD_SYS_ALLOC */

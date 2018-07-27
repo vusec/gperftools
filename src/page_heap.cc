@@ -247,8 +247,13 @@ void PageHeap::CommitSpan(Span* span) {
 bool PageHeap::DecommitSpan(Span* span) {
   ++stats_.decommit_count;
 
+#ifdef UFFD_SYS_ALLOC
+  bool rv = tcmalloc_uffd::SystemRelease(reinterpret_cast<void*>(span->start << kPageShift),
+                                         static_cast<size_t>(span->length << kPageShift));
+#else
   bool rv = TCMalloc_SystemRelease(reinterpret_cast<void*>(span->start << kPageShift),
                                    static_cast<size_t>(span->length << kPageShift));
+#endif
   if (rv) {
     stats_.committed_bytes -= span->length << kPageShift;
     stats_.total_decommit_bytes += (span->length << kPageShift);

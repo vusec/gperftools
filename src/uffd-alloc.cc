@@ -154,7 +154,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
     .mode = UFFDIO_REGISTER_MODE_MISSING
   };
   if (ioctl(uffd, UFFDIO_REGISTER, &reg) < 0)
-    lperror("could not register pages for userfaultfd");
+    lperror("uffd: could not register pages");
 
   ldbg("uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
 
@@ -162,6 +162,21 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
     llog(kCrash, "UFFDIO_COPY operation not supported on registered range");
 
   return ptr;
+}
+
+bool SystemRelease(void *start, size_t length) {
+  // Unregister allocated pages that never saw a page fault.
+  // FIXME: should we do this before calling TCMalloc_SystemRelease?
+  struct uffdio_range range = {
+    .start = reinterpret_cast<__u64>(start),
+    .len = length
+  };
+  if (ioctl(uffd, UFFDIO_UNREGISTER, &range) < 0)
+    lperror("uffd: could not unregister pages");
+
+  ldbg("uffd: unregistered", start, "-", (void*)((char*)start + length));
+
+  return TCMalloc_SystemRelease(start, length);
 }
 
 } // end namespace tcmalloc_uffd
