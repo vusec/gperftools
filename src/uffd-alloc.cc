@@ -80,10 +80,9 @@ static void *uffd_poller_thread(void*) {
     if (msg.event != UFFD_EVENT_PAGEFAULT)
       llog(kCrash, "received non-pagefault uffd event");
 
-    // Look up corresponding sizeclass through the span. For large allocations,
-    // only the first and last page in the span are mapped, so accesses within
-    // the allocation do not have an associated span but the sizeclass is known
-    // to be 0.
+    // Look up size class through span. For large allocations, only the first
+    // and last page in the span are mapped, so accesses within the allocation
+    // do not have an associated span but the size class is known to be 0.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
     Span *span = Static::pageheap()->GetDescriptor(p);
     unsigned int cl = span ? span->sizeclass : 0;
