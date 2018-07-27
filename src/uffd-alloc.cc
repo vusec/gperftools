@@ -25,14 +25,14 @@
 
 using namespace tcmalloc;
 
-#undef NDEBUG // TODO: remove when done debugging
+//#define DEBUG_UFFD_SYS_ALLOC // TODO: remove when done debugging
 
 namespace tcmalloc_uffd {
 
 #define llog(level, ...) Log((level), __FILE__, __LINE__, __VA_ARGS__)
 #define lperror(msg) llog(kCrash, msg ":", strerror(errno))
 
-#ifndef NDEBUG
+#ifdef DEBUG_UFFD_SYS_ALLOC
 # define ldbg(...) llog(kLog, __VA_ARGS__)
 #else
 # define ldbg(...)
