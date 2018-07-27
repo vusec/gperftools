@@ -293,7 +293,7 @@ LIBSPINLOCK = libspinlock.la libsysinfo.la liblogging.la
 
 TCMALLOC_CC = src/tcmalloc.cc
 libmaybe_threads_la_SOURCES += src/maybe_threads.cc
-SYSTEM_ALLOC_CC = src/system-alloc.cc
+SYSTEM_ALLOC_CC = src/system-alloc.cc src/uffd-alloc.cc
 endif !MINGW
 
 # Add this whether or not we're under MinGW, to keep the tarball complete.
@@ -422,6 +422,7 @@ endif WITH_STACK_TRACE
 S_TCMALLOC_MINIMAL_INCLUDES = src/common.h \
                               src/internal_logging.h \
                               src/system-alloc.h \
+                              src/uffd-alloc.h \
                               src/packed-cache-inl.h \
                               $(SPINLOCK_INCLUDES) \
                               src/tcmalloc_guard.h \

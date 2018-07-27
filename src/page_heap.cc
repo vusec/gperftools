@@ -43,6 +43,7 @@
 #include "page_heap_allocator.h"  // for PageHeapAllocator
 #include "static_vars.h"       // for Static
 #include "system-alloc.h"      // for TCMalloc_SystemAlloc, etc
+#include "uffd-alloc.h"        // for tcmalloc_uffd::SystemAlloc
 
 DEFINE_double(tcmalloc_release_rate,
               EnvToDouble("TCMALLOC_RELEASE_RATE", 1.0),
@@ -628,14 +629,22 @@ bool PageHeap::GrowHeap(Length n) {
   size_t actual_size;
   void* ptr = NULL;
   if (EnsureLimit(ask)) {
+#ifdef UFFD_SYS_ALLOC
+      ptr = tcmalloc_uffd::SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
+#else
       ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
+#endif
   }
   if (ptr == NULL) {
     if (n < ask) {
       // Try growing just "n" pages
       ask = n;
       if (EnsureLimit(ask)) {
+#ifdef UFFD_SYS_ALLOC
+        ptr = tcmalloc_uffd::SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
+#else
         ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
+#endif
       }
     }
     if (ptr == NULL) return false;
