@@ -25,10 +25,18 @@
 
 using namespace tcmalloc;
 
+#undef NDEBUG // TODO: remove when done debugging
+
 namespace tcmalloc_uffd {
 
 #define llog(level, ...) Log((level), __FILE__, __LINE__, __VA_ARGS__)
 #define lperror(msg) llog(kCrash, msg ":", strerror(errno))
+
+#ifndef NDEBUG
+# define ldbg(...) llog(kLog, __VA_ARGS__)
+#else
+# define ldbg(...)
+#endif
 
 #define check_pthread(call, errmsg)                               \
   do {                                                            \
@@ -44,7 +52,7 @@ static void *uffd_poller_thread(void*) {
   // the system page size. Although this is typically 2 system pages, it does
   // not matter for the filling logic.
 
-  llog(kLog, "uffd: start polling");
+  ldbg("uffd: start polling");
 
   // Allocate zeroed page to copy later.
   // TODO: create pool of pages per size class with pre-filled redzones
@@ -79,7 +87,7 @@ static void *uffd_poller_thread(void*) {
     const PageID p = msg.arg.pagefault.address >> kPageShift;
     Span *span = Static::pageheap()->GetDescriptor(p);
     unsigned int cl = span ? span->sizeclass : 0;
-    llog(kLog, "uffd: page fault", (void*)msg.arg.pagefault.address, p, cl);
+    ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p, cl);
 
     // TODO: Fill redzones
 
@@ -95,7 +103,7 @@ static void *uffd_poller_thread(void*) {
       lperror("could not copy pre-filled uffd page");
     ASSERT((size_t)copy.copy == kPageSize);
 
-    llog(kLog, "uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + kPageSize));
+    ldbg("uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + kPageSize));
   }
 
   return NULL;
@@ -104,7 +112,7 @@ static void *uffd_poller_thread(void*) {
 void initialize() {
   ASSERT(uffd == -1);
 
-  llog(kLog, "uffd: initialize");
+  ldbg("uffd: initialize");
 
   // Register userfaultfd file descriptor to poll from.
   if ((uffd = syscall(__NR_userfaultfd, 0)) < 0)
@@ -127,7 +135,7 @@ void initialize() {
                 "could not create uffd poller thread");
   cache.ResetUseEmergencyMalloc();
 
-  llog(kLog, "uffd: done initializing");
+  ldbg("uffd: done initializing");
 }
 
 // This replaces TCMalloc_SystemAlloc in PageHeap::GrowHeap.
@@ -149,7 +157,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
   if (ioctl(uffd, UFFDIO_REGISTER, &reg) < 0)
     lperror("could not register pages for userfaultfd");
 
-  llog(kLog, "uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
+  ldbg("uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
 
   if (!(reg.ioctls & (1 << _UFFDIO_COPY)))
     llog(kCrash, "UFFDIO_COPY operation not supported on registered range");
@@ -161,7 +169,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
 
 // placeholder for pass
 extern "C" void __check_redzone(void* ptr) {
-  llog(kLog, "check redzone at", ptr);
+  ldbg("check redzone at", ptr);
 }
 
 #endif // UFFD_SYS_ALLOC
