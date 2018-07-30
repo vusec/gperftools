@@ -80,13 +80,19 @@ static void *uffd_poller_thread(void*) {
     if (msg.event != UFFD_EVENT_PAGEFAULT)
       llog(kCrash, "received non-pagefault uffd event");
 
-    // Look up size class through span. For large allocations, only the first
-    // and last page in the span are mapped, so accesses within the allocation
-    // do not have an associated span but the size class is known to be 0.
+    // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
     Span *span = Static::pageheap()->GetDescriptor(p);
-    unsigned int cl = span ? span->sizeclass : 0;
-    ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p, cl);
+    // TODO: For large allocations, only the first and last page in the span
+    // are mapped originally, so I added mappings for the pages in between. The
+    // alternative is slow lookups by walking back one page at a time (see
+    // below), we should benchmark which is faster.
+    //for (PageID prev = p - 1; span == NULL && prev >= 0; prev--) {
+    //  //ldbg("no span found, walk back one page");
+    //  span = Static::pageheap()->GetDescriptor(prev);
+    //}
+    ASSERT(span);
+    ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p, span->sizeclass);
 
     // TODO: Fill redzones
 
