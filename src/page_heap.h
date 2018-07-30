@@ -298,10 +298,11 @@ class PERFTOOLS_DLL_DECL PageHeap {
   void RecordSpan(Span* span) {
 #ifdef UFFD_SYS_ALLOC
     // Record an entry for every page in the span so that span lookups on page
-    // fault are fast
+    // fault are fast.
     // TODO: benchmark this vs. slow lookups
-    for (int i = 0; i < span->length; i++)
+    for (int i = 0; i < span->length; i++) {
       pagemap_.set(span->start + i, span);
+    }
 #else
     pagemap_.set(span->start, span);
     if (span->length > 1) {
