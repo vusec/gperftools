@@ -144,6 +144,32 @@ static const int kAddressBits = (sizeof(void*) < 8 ? (8 * sizeof(void*)) : 48);
 static const int kAddressBits = 8 * sizeof(void*);
 #endif
 
+//-------------------------------------------------------------------
+// Redzones config
+//-------------------------------------------------------------------
+
+#ifdef RZ_ALLOC
+
+# ifndef RZ_SIZE
+#  error "RZ_SIZE must be defined for RZ_ALLOC"
+# endif
+static const size_t kRedzoneSize = RZ_SIZE;
+
+# ifdef RZ_FILL
+#  ifndef RZ_VALUE
+#   error "RZ_VALUE must be defined for RZ_FILL"
+#  endif
+static const unsigned char kRedzoneValue = RZ_VALUE;
+# endif
+
+#elif defined(RZ_FILL)
+# error "cannot have RZ_FILL without RZ_ALLOC"
+
+#elif defined(RZ_REUSE)
+# error "cannot have RZ_REUSE without RZ_ALLOC"
+
+#endif // RZ_ALLOC
+
 namespace tcmalloc {
 
 // Convert byte size into pages.  This won't overflow, but may return

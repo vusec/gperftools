@@ -6,7 +6,7 @@
 #ifndef TCMALLOC_UFFD_ALLOC_H_
 #define TCMALLOC_UFFD_ALLOC_H_
 
-#ifdef UFFD_SYS_ALLOC
+#ifdef RZ_REUSE
 
 #include <config.h>
 
@@ -18,6 +18,6 @@ namespace tcmalloc_uffd {
   bool SystemRelease(void *start, size_t length);
 }
 
-#endif /* UFFD_SYS_ALLOC */
+#endif /* RZ_REUSE */
 
 #endif /* TCMALLOC_UFFD_ALLOC_H_ */

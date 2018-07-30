@@ -1,8 +1,6 @@
 // ---
 // Author: Taddeus Kroes <t.kroes@vu.nl>
 
-#ifdef UFFD_SYS_ALLOC
-
 #ifndef _GNU_SOURCE
 # define _GNU_SOURCE
 #endif
@@ -25,18 +23,17 @@
 
 using namespace tcmalloc;
 
-//#define DEBUG_UFFD_SYS_ALLOC // TODO: remove when done debugging
-
-namespace tcmalloc_uffd {
-
 #define llog(level, ...) Log((level), __FILE__, __LINE__, __VA_ARGS__)
 #define lperror(msg) llog(kCrash, msg ":", strerror(errno))
 
-#ifdef DEBUG_UFFD_SYS_ALLOC
+#ifdef RZ_DEBUG
 # define ldbg(...) llog(kLog, __VA_ARGS__)
 #else
 # define ldbg(...)
 #endif
+
+#ifdef RZ_REUSE
+namespace tcmalloc_uffd {
 
 #define check_pthread(call, errmsg)                               \
   do {                                                            \
@@ -88,13 +85,15 @@ static void *uffd_poller_thread(void*) {
     // alternative is slow lookups by walking back one page at a time (see
     // below), we should benchmark which is faster.
     //for (PageID prev = p - 1; span == NULL && prev >= 0; prev--) {
-    //  //ldbg("no span found, walk back one page");
     //  span = Static::pageheap()->GetDescriptor(prev);
     //}
     ASSERT(span);
+    ASSERT(span->location == Span::IN_USE);
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p, span->sizeclass);
 
+#ifdef RZ_FILL
     // TODO: Fill redzones
+#endif
 
     // Copy pre-filled redzone page to target page.
     uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
@@ -186,10 +185,13 @@ bool SystemRelease(void *start, size_t length) {
 }
 
 } // end namespace tcmalloc_uffd
+#endif // RZ_REUSE
+
+#ifdef RZ_ALLOC
 
 // placeholder for pass
 extern "C" void __check_redzone(void* ptr) {
   ldbg("check redzone at", ptr);
 }
 
-#endif // UFFD_SYS_ALLOC
+#endif // RZ_ALLOC

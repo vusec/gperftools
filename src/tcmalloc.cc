@@ -1345,7 +1345,17 @@ static void *nop_oom_handler(size_t size) {
   return NULL;
 }
 
+#ifdef RZ_FILL
+static inline void FillRedzone(void *ptr, size_t allocsize) {
+# ifndef RZ_REUSE
+  memset((char*)ptr + allocsize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+# endif
+}
+#endif
+
 ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc(size_t size) {
+  // We don't need redzones here, emergency malloc is only used by trusted code
+  // during library initialization.
   if (PREDICT_FALSE(ThreadCache::IsUseEmergencyMalloc())) {
     return tcmalloc::EmergencyMalloc(size);
   }
@@ -1356,6 +1366,13 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc(size_t size) {
 
   ASSERT(Static::IsInited());
   ASSERT(cache != NULL);
+
+#ifdef RZ_ALLOC
+  // Add redzone to requested size. This makes sure there is room for a redzone
+  // at the end of each allocated object. A page fault handler initializes the
+  // last kRedzoneSize bytes of the object with kRedzoneValue.
+  size += kRedzoneSize;
+#endif
 
   if (PREDICT_FALSE(!Static::sizemap()->GetSizeClass(size, &cl))) {
     return do_malloc_pages(cache, size);
@@ -1368,7 +1385,11 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc(size_t size) {
 
   // The common case, and also the simplest.  This just pops the
   // size-appropriate freelist, after replenishing it if it's empty.
-  return CheckedMallocResult(cache->Allocate(allocated_size, cl, nop_oom_handler));
+  void *ptr = CheckedMallocResult(cache->Allocate(allocated_size, cl, nop_oom_handler));
+#ifdef RZ_FILL
+  FillRedzone(ptr, allocated_size);
+#endif
+  return ptr;
 }
 
 static void *retry_malloc(void* size) {
@@ -1528,8 +1549,13 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_realloc_with_callback(
     void* old_ptr, size_t new_size,
     void (*invalid_free_fn)(void*),
     size_t (*invalid_get_size_fn)(const void*)) {
+#ifdef RZ_ALLOC
+  // Subtract the redzone before comparing with new_size
+  const size_t old_size = GetSizeWithCallback(old_ptr, invalid_get_size_fn) - kRedzoneSize;
+#else
   // Get the size of the old entry
   const size_t old_size = GetSizeWithCallback(old_ptr, invalid_get_size_fn);
+#endif
 
   // Reallocate if the new size is larger than the old size,
   // or if the new size is significantly smaller than the old size.
@@ -1578,6 +1604,12 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_realloc(void* old_ptr, size_t new_size) 
 
 static ATTRIBUTE_ALWAYS_INLINE inline
 void* do_memalign_pages(size_t align, size_t size) {
+#ifdef RZ_ALLOC
+  //  This is only for large memalign allocations. Other do_memalign calls end
+  //  up in do_malloc which also adds the redzone size.
+  size += kRedzoneSize;
+#endif
+
   ASSERT((align & (align - 1)) == 0);
   ASSERT(align > kPageSize);
   if (size + align < size) return NULL;         // Overflow
@@ -1614,6 +1646,9 @@ void* do_memalign_pages(size_t align, size_t size) {
     Span* trailer = Static::pageheap()->Split(span, needed);
     Static::pageheap()->Delete(trailer);
   }
+#ifdef RZ_FILL
+  FillRedzone((void*)(span->start << kPageShift), span->length * kPageSize);
+#endif
   return SpanToMallocResult(span);
 }
 

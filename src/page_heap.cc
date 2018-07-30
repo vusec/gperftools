@@ -247,7 +247,7 @@ void PageHeap::CommitSpan(Span* span) {
 bool PageHeap::DecommitSpan(Span* span) {
   ++stats_.decommit_count;
 
-#ifdef UFFD_SYS_ALLOC
+#ifdef RZ_REUSE
   bool rv = tcmalloc_uffd::SystemRelease(reinterpret_cast<void*>(span->start << kPageShift),
                                          static_cast<size_t>(span->length << kPageShift));
 #else
@@ -562,7 +562,7 @@ void PageHeap::RegisterSizeClass(Span* span, uint32 sc) {
   ASSERT(GetDescriptor(span->start+span->length-1) == span);
   Event(span, 'C', sc);
   span->sizeclass = sc;
-#ifndef UFFD_SYS_ALLOC
+#ifndef RZ_REUSE
   // This is done in RecordSpan already in UFFD mode.
   for (Length i = 1; i < span->length-1; i++) {
     pagemap_.set(span->start+i, span);
@@ -637,7 +637,7 @@ bool PageHeap::GrowHeap(Length n) {
   size_t actual_size;
   void* ptr = NULL;
   if (EnsureLimit(ask)) {
-#ifdef UFFD_SYS_ALLOC
+#ifdef RZ_REUSE
       ptr = tcmalloc_uffd::SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
 #else
       ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
@@ -648,7 +648,7 @@ bool PageHeap::GrowHeap(Length n) {
       // Try growing just "n" pages
       ask = n;
       if (EnsureLimit(ask)) {
-#ifdef UFFD_SYS_ALLOC
+#ifdef RZ_REUSE
         ptr = tcmalloc_uffd::SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
 #else
         ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);

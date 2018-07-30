@@ -296,7 +296,7 @@ class PERFTOOLS_DLL_DECL PageHeap {
   Span* Carve(Span* span, Length n);
 
   void RecordSpan(Span* span) {
-#ifdef UFFD_SYS_ALLOC
+#ifdef RZ_REUSE
     // Record an entry for every page in the span so that span lookups on page
     // fault are fast.
     // TODO: benchmark this vs. slow lookups
