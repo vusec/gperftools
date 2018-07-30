@@ -1310,6 +1310,25 @@ inline bool should_report_large(Length num_pages) {
   return false;
 }
 
+static inline size_t AddRedzone(size_t size) {
+#ifdef RZ_ALLOC
+  size += kRedzoneSize;
+# ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "pad allocsize to", size);
+# endif
+#endif
+  return size;
+}
+
+static inline void FillRedzone(void *ptr, size_t allocsize) {
+#if defined(RZ_FILL) && !defined(RZ_REUSE)
+# ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "fill redzone at end of", allocsize, "bytes");
+# endif
+  memset((char*)ptr + allocsize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+#endif
+}
+
 // Helper for do_malloc().
 static void* do_malloc_pages(ThreadCache* heap, size_t size) {
   void* result;
@@ -1338,20 +1357,14 @@ static void* do_malloc_pages(ThreadCache* heap, size_t size) {
   if (report_large) {
     ReportLargeAlloc(num_pages, result);
   }
+
+  FillRedzone(result, num_pages * kPageSize);
   return result;
 }
 
 static void *nop_oom_handler(size_t size) {
   return NULL;
 }
-
-#ifdef RZ_FILL
-static inline void FillRedzone(void *ptr, size_t allocsize) {
-# ifndef RZ_REUSE
-  memset((char*)ptr + allocsize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
-# endif
-}
-#endif
 
 ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc(size_t size) {
   // We don't need redzones here, emergency malloc is only used by trusted code
@@ -1367,28 +1380,22 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc(size_t size) {
   ASSERT(Static::IsInited());
   ASSERT(cache != NULL);
 
-#ifdef RZ_ALLOC
-  // Add redzone to requested size. This makes sure there is room for a redzone
-  // at the end of each allocated object. A page fault handler initializes the
-  // last kRedzoneSize bytes of the object with kRedzoneValue.
-  size += kRedzoneSize;
-#endif
-
   if (PREDICT_FALSE(!Static::sizemap()->GetSizeClass(size, &cl))) {
     return do_malloc_pages(cache, size);
   }
 
   size_t allocated_size = Static::sizemap()->class_to_size(cl);
+  void *ptr;
+
   if (PREDICT_FALSE(cache->SampleAllocation(allocated_size))) {
-    return DoSampledAllocation(size);
+    ptr = DoSampledAllocation(size);
+  } else {
+    // The common case, and also the simplest.  This just pops the
+    // size-appropriate freelist, after replenishing it if it's empty.
+    ptr = CheckedMallocResult(cache->Allocate(allocated_size, cl, nop_oom_handler));
   }
 
-  // The common case, and also the simplest.  This just pops the
-  // size-appropriate freelist, after replenishing it if it's empty.
-  void *ptr = CheckedMallocResult(cache->Allocate(allocated_size, cl, nop_oom_handler));
-#ifdef RZ_FILL
   FillRedzone(ptr, allocated_size);
-#endif
   return ptr;
 }
 
@@ -1397,6 +1404,7 @@ static void *retry_malloc(void* size) {
 }
 
 ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc_or_cpp_alloc(size_t size) {
+  size = AddRedzone(size);
   void *rv = do_malloc(size);
   if (PREDICT_TRUE(rv != NULL)) {
     return rv;
@@ -1406,7 +1414,9 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc_or_cpp_alloc(size_t size) {
 }
 
 ATTRIBUTE_ALWAYS_INLINE inline void* do_calloc(size_t n, size_t elem_size) {
-  // Overflow check
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "intercept calloc", n, elem_size);
+#endif
   const size_t size = n * elem_size;
   if (elem_size != 0 && size / elem_size != n) return NULL;
 
@@ -1604,11 +1614,10 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_realloc(void* old_ptr, size_t new_size) 
 
 static ATTRIBUTE_ALWAYS_INLINE inline
 void* do_memalign_pages(size_t align, size_t size) {
-#ifdef RZ_ALLOC
-  //  This is only for large memalign allocations. Other do_memalign calls end
-  //  up in do_malloc which also adds the redzone size.
-  size += kRedzoneSize;
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "intercept do_memalign_pages", align, size);
 #endif
+  size = AddRedzone(size);
 
   ASSERT((align & (align - 1)) == 0);
   ASSERT(align > kPageSize);
@@ -1646,9 +1655,7 @@ void* do_memalign_pages(size_t align, size_t size) {
     Span* trailer = Static::pageheap()->Split(span, needed);
     Static::pageheap()->Delete(trailer);
   }
-#ifdef RZ_FILL
   FillRedzone((void*)(span->start << kPageShift), span->length * kPageSize);
-#endif
   return SpanToMallocResult(span);
 }
 
@@ -1870,6 +1877,11 @@ void* memalign_pages(size_t align, size_t size,
 template <void* OOMHandler(size_t)>
 ATTRIBUTE_ALWAYS_INLINE inline
 static void * malloc_fast_path(size_t size) {
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "intercept malloc fast path", size);
+#endif
+  size = AddRedzone(size);
+
   if (PREDICT_FALSE(!base::internal::new_hooks_.empty())) {
     return tcmalloc::dispatch_allocate_full<OOMHandler>(size);
   }
@@ -1891,7 +1903,9 @@ static void * malloc_fast_path(size_t size) {
     return tcmalloc::dispatch_allocate_full<OOMHandler>(size);
   }
 
-  return CheckedMallocResult(cache->Allocate(allocated_size, cl, OOMHandler));
+  void *ptr = CheckedMallocResult(cache->Allocate(allocated_size, cl, OOMHandler));
+  FillRedzone(ptr, allocated_size);
+  return ptr;
 }
 
 template <void* OOMHandler(size_t)>
@@ -1994,6 +2008,9 @@ TC_ALIAS(tc_free);
 
 extern "C" PERFTOOLS_DLL_DECL void* tc_realloc(void* old_ptr,
                                                size_t new_size) PERFTOOLS_NOTHROW {
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "intercept realloc", old_ptr, new_size);
+#endif
   if (old_ptr == NULL) {
     void* result = do_malloc_or_cpp_alloc(new_size);
     MallocHook::InvokeNewHook(result, new_size);
