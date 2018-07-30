@@ -1,6 +1,8 @@
 // ---
 // Author: Taddeus Kroes <t.kroes@vu.nl>
 
+#ifdef RZ_ALLOC
+
 #ifndef _GNU_SOURCE
 # define _GNU_SOURCE
 #endif
@@ -20,6 +22,7 @@
 #include "static_vars.h"        // for Static
 #include "thread_cache.h"       // for ThreadCache
 #include "uffd-alloc.h"         // for tcmalloc_uffd::SystemAlloc
+#include "redzone-check.h"      // for tcmalloc_is_redzone, etc
 
 using namespace tcmalloc;
 
@@ -79,7 +82,7 @@ static void *uffd_poller_thread(void*) {
 
     // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
-    Span *span = Static::pageheap()->GetDescriptor(p);
+    const Span *span = Static::pageheap()->GetDescriptor(p);
     // TODO: For large allocations, only the first and last page in the span
     // are mapped originally, so I added mappings for the pages in between. The
     // alternative is slow lookups by walking back one page at a time (see
@@ -91,11 +94,9 @@ static void *uffd_poller_thread(void*) {
     ASSERT(span->location == Span::IN_USE);
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p, span->sizeclass);
 
-#ifdef RZ_FILL
     // TODO: Fill redzones
-#endif
 
-    // Copy pre-filled redzone page to target page.
+    // Copy pre-filled redzone page to target page. TODO: remove this
     uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
     struct uffdio_copy copy = {
       .dst = pfpage,
@@ -187,11 +188,43 @@ bool SystemRelease(void *start, size_t length) {
 } // end namespace tcmalloc_uffd
 #endif // RZ_REUSE
 
-#ifdef RZ_ALLOC
-
-// placeholder for pass
-extern "C" void __check_redzone(void* ptr) {
+static bool points_to_redzone(void *ptr) {
   ldbg("check redzone at", ptr);
+
+  const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+  const PageID p = addr >> kPageShift;
+  const tcmalloc::Span *span = tcmalloc::Static::pageheap()->GetDescriptor(p);
+
+  // Ignore if we cannot access span.
+  ASSERT(span);
+  if (PREDICT_FALSE(!span)) {
+    ldbg("cannot find span for", ptr, "on page", p);
+    return false;
+  }
+
+  const uintptr_t base = span->start << kPageShift;
+  ASSERT(base <= addr);
+
+  // Large objects have the redzone at the end of the last page.
+  if (PREDICT_FALSE(span->sizeclass == 0)) {
+    const uintptr_t span_end = base + span->length * kPageSize;
+    return addr + kRedzoneSize >= span_end;
+  }
+
+  // Small objects have a redzone at the end of each allocation unit.
+  const size_t size = Static::sizemap()->ByteSizeForClass(span->sizeclass);
+  const size_t span_offset = addr - base;
+  const size_t object_offset = span_offset % size;
+  return object_offset + kRedzoneSize >= size;
+}
+
+extern "C" bool tcmalloc_is_redzone(void *ptr) {
+  return points_to_redzone(ptr);
+}
+
+extern "C" bool tcmalloc_is_redzone_multi(void *ptr, uint64_t naccess) {
+  llog(kCrash, "multibyte checks not yet supported");
+  return false;
 }
 
 #endif // RZ_ALLOC
