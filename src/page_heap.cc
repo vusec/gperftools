@@ -229,7 +229,9 @@ Span* PageHeap::Split(Span* span, Length n) {
   ASSERT(leftover->location == Span::IN_USE);
   Event(leftover, 'U', extra);
   RecordSpan(leftover);
+#ifndef RZ_ALLOC
   pagemap_.set(span->start + n - 1, span); // Update map from pageid to span
+#endif
   span->length = n;
 
   return leftover;
@@ -292,7 +294,9 @@ Span* PageHeap::Carve(Span* span, Length n) {
 
     PrependToFreeList(leftover);  // Skip coalescing - no candidates possible
     span->length = n;
+#ifndef RZ_ALLOC
     pagemap_.set(span->start + n - 1, span);
+#endif
   }
   ASSERT(Check());
   if (old_location == Span::ON_RETURNED_FREELIST) {
@@ -384,7 +388,13 @@ void PageHeap::MergeIntoFreeList(Span* span) {
     DeleteSpan(prev);
     span->start -= len;
     span->length += len;
+#ifdef RZ_ALLOC
+    for (Length i = 0; i < len; i++) {
+      pagemap_.set(span->start + i, span);
+    }
+#else
     pagemap_.set(span->start, span);
+#endif
     Event(span, 'L', len);
   }
   Span* next = CheckAndHandlePreMerge(span, GetDescriptor(p+n));
@@ -394,7 +404,13 @@ void PageHeap::MergeIntoFreeList(Span* span) {
     const Length len = next->length;
     DeleteSpan(next);
     span->length += len;
+#ifdef RZ_ALLOC
+    for (Length i = span->length - len; i < span->length; i++) {
+      pagemap_.set(span->start + i, span);
+    }
+#else
     pagemap_.set(span->start + span->length - 1, span);
+#endif
     Event(span, 'R', len);
   }
 
@@ -562,8 +578,8 @@ void PageHeap::RegisterSizeClass(Span* span, uint32 sc) {
   ASSERT(GetDescriptor(span->start+span->length-1) == span);
   Event(span, 'C', sc);
   span->sizeclass = sc;
-#ifndef RZ_REUSE
-  // This is done in RecordSpan already in UFFD mode.
+#ifndef RZ_ALLOC
+  // This is already done in RecordSpan.
   for (Length i = 1; i < span->length-1; i++) {
     pagemap_.set(span->start+i, span);
   }

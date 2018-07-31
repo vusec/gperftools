@@ -300,7 +300,7 @@ class PERFTOOLS_DLL_DECL PageHeap {
     // Record an entry for every page in the span so that span lookups on page
     // fault are fast.
     // TODO: benchmark this vs. slow lookups
-    for (int i = 0; i < span->length; i++) {
+    for (Length i = 0; i < span->length; i++) {
       pagemap_.set(span->start + i, span);
     }
 #else
