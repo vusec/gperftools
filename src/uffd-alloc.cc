@@ -92,7 +92,8 @@ static void *uffd_poller_thread(void*) {
     //}
     ASSERT(span);
     ASSERT(span->location == Span::IN_USE);
-    ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p, span->sizeclass);
+    ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p);
+    ldbg("uffd:   span:", span, span->sizeclass, span->length);
 
     // TODO: Fill redzones
 
