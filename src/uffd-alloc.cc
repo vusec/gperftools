@@ -45,6 +45,55 @@ namespace tcmalloc_uffd {
       Log(kCrash, __FILE__, __LINE__, errmsg ":", strerror(ret)); \
   } while(0)
 
+static char *mmapx(size_t size) {
+  char *page = (char*)mmap(NULL, size, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (page == MAP_FAILED)
+    lperror("mmap of zeropage failed");
+  return page;
+}
+
+#ifdef RZ_FILL
+static void *fill_redzones(const PageID p, const Span *span) {
+  // TODO: create pool of pages per size class with pre-filled redzones
+  static char *buf = mmapx(kPageSize);
+  memset(buf, 0, kPageSize);
+
+  // For large allocations, put the redzone at the end of the last buf.
+  if (span->sizeclass == 0) {
+    if (span->start + span->length - 1 == p) {
+      memset(buf + kPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+    }
+    return buf;
+  }
+
+  // For small/medium allocations, fill all redzones of objects that are either
+  // fully or partially in this page.
+  const uintptr_t page_start = p << kPageShift;
+  const uintptr_t page_end = page_start + kPageSize;
+  const ptrdiff_t bufshift = (uintptr_t)buf - page_start;
+
+  const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
+  ASSERT(p >= span->start);
+  const size_t first_object_offset = (p - span->start) % objsize;
+  const size_t first_redzone_offset = objsize - kRedzoneSize - first_object_offset;
+
+  ldbg("uffd: initialize redzones for page", p, "object size", objsize);
+  for (uintptr_t redzone = page_start + first_redzone_offset;
+       redzone < page_end; redzone += objsize) {
+    const size_t head_space = page_start - redzone;
+    const size_t tail_space = page_end - redzone;
+    const size_t strip_head = head_space < kRedzoneSize ? kRedzoneSize - head_space : 0;
+    const size_t strip_tail = tail_space < kRedzoneSize ? kRedzoneSize - tail_space : 0;
+    const size_t nbytes = kRedzoneSize - strip_head - strip_tail;
+    ldbg("uffd:   fill", nbytes, "redzone bytes at offset", redzone - page_start);
+    memset((char*)(redzone + strip_head + bufshift), kRedzoneValue, nbytes);
+  }
+
+  return buf;
+}
+#endif
+
 static int uffd = -1;
 
 static void *uffd_poller_thread(void*) {
@@ -53,13 +102,6 @@ static void *uffd_poller_thread(void*) {
   // not matter for the filling logic.
 
   ldbg("uffd: start polling");
-
-  // Allocate zeroed page to copy later.
-  // TODO: create pool of pages per size class with pre-filled redzones
-  char *zeropage = (char*)mmap(NULL, kPageSize, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (zeropage == MAP_FAILED)
-    lperror("mmap of zeropage failed");
 
   while (1) {
     // Wait for message. We don't use a timeout, the thread just ends when the
@@ -83,8 +125,9 @@ static void *uffd_poller_thread(void*) {
     // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
     const Span *span = Static::pageheap()->GetDescriptor(p);
-    // TODO: For large allocations, only the first and last page in the span
-    // are mapped originally, so I added mappings for the pages in between. The
+    uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
+    // XXX For large allocations, only the first and last page in the span are
+    // mapped originally, so I added mappings for the pages in between. The
     // alternative is slow lookups by walking back one page at a time (see
     // below), we should benchmark which is faster.
     //for (PageID prev = p - 1; span == NULL && prev >= 0; prev--) {
@@ -95,13 +138,18 @@ static void *uffd_poller_thread(void*) {
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p);
     ldbg("uffd:   span:", span, span->sizeclass, span->length);
 
-    // TODO: Fill redzones
+#ifdef RZ_FILL
+    // Build a page with filled redzones.
+    const void *page = fill_redzones(p, span);
+#else
+    // Allocate a zeroed page once and reuse it for next copy.
+    static const void *page = mmapx(kPageSize);
+#endif
 
     // Copy pre-filled redzone page to target page. TODO: remove this
-    uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
     struct uffdio_copy copy = {
       .dst = pfpage,
-      .src = reinterpret_cast<uintptr_t>(zeropage),
+      .src = reinterpret_cast<uintptr_t>(page),
       .len = kPageSize,
       .mode = 0
     };
