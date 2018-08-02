@@ -86,8 +86,10 @@ static void *fill_redzones(const PageID p, const Span *span) {
     const size_t strip_head = head_space < kRedzoneSize ? kRedzoneSize - head_space : 0;
     const size_t strip_tail = tail_space < kRedzoneSize ? kRedzoneSize - tail_space : 0;
     const size_t nbytes = kRedzoneSize - strip_head - strip_tail;
-    ldbg("uffd:   fill", nbytes, "redzone bytes at offset", redzone - page_start);
-    memset((char*)(redzone + strip_head + bufshift), kRedzoneValue, nbytes);
+    if (nbytes) {
+      ldbg("uffd:   fill", nbytes, "redzone bytes at offset", redzone - page_start);
+      memset((char*)(redzone + strip_head + bufshift), kRedzoneValue, nbytes);
+    }
   }
 
   return buf;
