@@ -202,6 +202,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
   // Just wrap TCMalloc_SystemAlloc and register the allocated memory range for
   // page faults.
   void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
+  ASSERT(ptr != NULL);
 
   struct uffdio_register reg = {
     .range = {
@@ -210,6 +211,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
     },
     .mode = UFFDIO_REGISTER_MODE_MISSING
   };
+  llog(kLog, "uffd: try register", ptr, reg.range.len, reg.mode);
   if (ioctl(uffd, UFFDIO_REGISTER, &reg) < 0)
     lperror("uffd: could not register pages");
 

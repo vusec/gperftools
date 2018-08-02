@@ -332,13 +332,18 @@ void* MmapSysAllocator::Alloc(size_t size, size_t *actual_size,
 
   // Return the unused memory to the system
   if (adjust > 0) {
+    Log(kLog, __FILE__, __LINE__, "uffd: unmapping", adjust, "adjust bytes at",
+        reinterpret_cast<void*>(ptr));
     munmap(reinterpret_cast<void*>(ptr), adjust);
   }
   if (adjust < extra) {
+    Log(kLog, __FILE__, __LINE__, "uffd: unmapping", extra, "extra bytes at",
+        reinterpret_cast<void*>(ptr + adjust + size));
     munmap(reinterpret_cast<void*>(ptr + adjust + size), extra - adjust);
   }
 
   ptr += adjust;
+  Log(kLog, __FILE__, __LINE__, "uffd: mmap sysalloc", (void*)ptr, size, extra);
   return reinterpret_cast<void*>(ptr);
 #endif  // HAVE_MMAP
 }
@@ -459,6 +464,10 @@ SysAllocator *tc_get_sysalloc_override(SysAllocator *def)
 
 static bool system_alloc_inited = false;
 void InitSystemAllocators(void) {
+#ifdef RZ_REUSE // FIXME: is this necessary?
+  // Force mmap allocator so we can use UFFDIO_REGISTER on allocated pages.
+  tcmalloc_sys_alloc = new (mmap_space.buf) MmapSysAllocator();
+#else
   MmapSysAllocator *mmap = new (mmap_space.buf) MmapSysAllocator();
   SbrkSysAllocator *sbrk = new (sbrk_space.buf) SbrkSysAllocator();
 
@@ -479,6 +488,7 @@ void InitSystemAllocators(void) {
   }
 
   tcmalloc_sys_alloc = tc_get_sysalloc_override(sdef);
+#endif // RZ_REUSE
 }
 
 void* TCMalloc_SystemAlloc(size_t size, size_t *actual_size,
