@@ -6,7 +6,7 @@
 #ifndef _GNU_SOURCE
 # define _GNU_SOURCE
 #endif
-#include <unistd.h>             // for syscall, sysconf
+#include <unistd.h>             // for syscall, sysconf, getpid
 #include <sys/syscall.h>        // for __NR_userfaultfd
 #include <sys/mman.h>           // for mmap, munmap, MADV_DONTNEED, etc
 #include <sys/ioctl.h>          // for ioctl, UFFD*
@@ -87,7 +87,7 @@ static void *fill_redzones(const PageID p, const Span *span) {
     const size_t strip_tail = tail_space < kRedzoneSize ? kRedzoneSize - tail_space : 0;
     const size_t nbytes = kRedzoneSize - strip_head - strip_tail;
     if (nbytes) {
-      ldbg("uffd:   fill", nbytes, "redzone bytes at offset", redzone - page_start);
+      //ldbg("uffd:   fill", nbytes, "redzone bytes at offset", redzone - page_start);
       memset((char*)(redzone + strip_head + bufshift), kRedzoneValue, nbytes);
     }
   }
@@ -147,6 +147,7 @@ static void *uffd_poller_thread(void*) {
     // Allocate a zeroed page once and reuse it for next copy.
     static const void *page = mmapx(kPageSize);
 #endif
+    // TODO: use UFFDIO_ZEROPAGE for zeroed pages (avoid memset(0) there)
 
     // Copy pre-filled redzone page to target page. TODO: remove this
     struct uffdio_copy copy = {
@@ -165,10 +166,14 @@ static void *uffd_poller_thread(void*) {
   return NULL;
 }
 
+static void reset_uffd() {
+  uffd = -1;
+}
+
 void initialize() {
   ASSERT(uffd == -1);
 
-  ldbg("uffd: initialize");
+  ldbg("uffd: initialize in process", getpid());
 
   // Register userfaultfd file descriptor to poll from.
   if ((uffd = syscall(__NR_userfaultfd, 0)) < 0)
@@ -189,6 +194,11 @@ void initialize() {
   pthread_t tid;
   check_pthread(pthread_create(&tid, NULL, &uffd_poller_thread, NULL),
                 "could not create uffd poller thread");
+  // The uffd file descriptor is not inherited properly after fork() and the
+  // poller thread is not started in the child, so we force reinitialization
+  // in the child by resetting the file descriptor.
+  check_pthread(pthread_atfork(NULL, NULL, reset_uffd),
+                "could not set fork handler");
   cache.ResetUseEmergencyMalloc();
 
   ldbg("uffd: done initializing");
@@ -211,7 +221,6 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
     },
     .mode = UFFDIO_REGISTER_MODE_MISSING
   };
-  llog(kLog, "uffd: try register", ptr, reg.range.len, reg.mode);
   if (ioctl(uffd, UFFDIO_REGISTER, &reg) < 0)
     lperror("uffd: could not register pages");
 
@@ -233,7 +242,7 @@ bool SystemRelease(void *start, size_t length) {
   if (ioctl(uffd, UFFDIO_UNREGISTER, &range) < 0)
     lperror("uffd: could not unregister pages");
 
-  ldbg("uffd: unregistered", start, "-", (void*)((char*)start + length));
+  ldbg("uffd: unregistered", start, "-", (char*)start + length);
 
   return TCMalloc_SystemRelease(start, length);
 }
