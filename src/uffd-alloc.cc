@@ -167,7 +167,11 @@ static void *uffd_poller_thread(void*) {
 }
 
 static void reset_uffd() {
-  uffd = -1;
+  if (uffd != -1) {
+    ldbg("uffd: closing inherited file descriptor to force reinitialization after fork");
+    close(uffd);
+    uffd = -1;
+  }
 }
 
 void initialize() {
@@ -183,7 +187,7 @@ void initialize() {
   struct uffdio_api api = { .api = UFFD_API, .features = 0 };
   if (ioctl(uffd, UFFDIO_API, &api) < 0)
     lperror("couldn't set userfaultfd api");
-  if (!(api.ioctls & (1 << _UFFDIO_REGISTER)))
+  if (api.ioctls & (1 << _UFFDIO_REGISTER) == 0)
     llog(kCrash, "userfaultfd REGISTER operation not supported");
 
   // Poll file descriptor from helper thread. pthread_create allocates a stack
@@ -226,7 +230,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
 
   ldbg("uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
 
-  if (!(reg.ioctls & (1 << _UFFDIO_COPY)))
+  if (reg.ioctls & (1 << _UFFDIO_COPY) == 0)
     llog(kCrash, "UFFDIO_COPY operation not supported on registered range");
 
   return ptr;
