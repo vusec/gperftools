@@ -112,6 +112,10 @@
 #include <new>                          // for nothrow_t (ptr only), etc
 #include <vector>                       // for vector
 
+#ifdef RZ_REUSE
+#include <sys/mman.h>                   // for madvise
+#endif
+
 #include <gperftools/malloc_extension.h>
 #include <gperftools/malloc_hook.h>         // for MallocHook
 #include <gperftools/nallocx.h>
@@ -1442,7 +1446,18 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
     Static::stacktrace_allocator()->Delete(st);
     span->objects = NULL;
   }
+#ifdef RZ_REUSE
+  // Have the kernel remove page mappings for pages in this span to assert that
+  // page faults happen to reinitialize redzones.
+  void *start = reinterpret_cast<void*>(span->start << kPageShift);
+  size_t length = span->length << kPageShift;
   Static::pageheap()->Delete(span);
+  if (madvise(start, length, MADV_DONTNEED) < 0) {
+    Log(kCrash, __FILE__, __LINE__, "madvise:", strerror(errno));
+  }
+#else
+  Static::pageheap()->Delete(span);
+#endif
 }
 
 // Helper for the object deletion (free, delete, etc.).  Inputs:

@@ -162,6 +162,10 @@ static const size_t kRedzoneSize = RZ_SIZE;
 static const unsigned char kRedzoneValue = RZ_VALUE;
 # endif
 
+# if defined(RZ_REUSE) && !defined(HAVE_MMAP)
+#  error "need mmap/munmap/madvise for RZ_REUSE"
+# endif
+
 #elif defined(RZ_FILL)
 # error "cannot have RZ_FILL without RZ_ALLOC"
 
