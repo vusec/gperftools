@@ -10,11 +10,11 @@
 #include <sys/syscall.h>        // for __NR_userfaultfd
 #include <sys/mman.h>           // for mmap, munmap, MADV_DONTNEED, etc
 #include <sys/ioctl.h>          // for ioctl, UFFD*
+#include <sys/epoll.h>          // for epoll_*
 #include <linux/userfaultfd.h>  // for 
 #include <pthread.h>            // for pthread_*
 #include <string.h>             // for strerror
 #include <errno.h>              // for errno
-#include <poll.h>               // for poll, POLLIN, etc
 #include <fcntl.h>              // for O_NONBLOCK
 #include "base/basictypes.h"    // for PREDICT_FALSE
 #include "system-alloc.h"       // for SysAllocator, MmapSysAllocator, mmap_space
@@ -106,15 +106,22 @@ static void *uffd_poller_thread(void*) {
 
   ldbg("uffd: start polling");
 
+  int epollfd = epoll_create1(O_CLOEXEC);
+  if (epollfd < 0)
+    lperror("epoll_create");
+
+  struct epoll_event event = { .events = EPOLLIN, .data = { .fd = uffd } };
+  if (epoll_ctl(epollfd, EPOLL_CTL_ADD, uffd, &event) < 0)
+    lperror("epoll_ctl");
+
   while (1) {
     // Wait for message. We don't use a timeout, the thread just ends when the
     // main program ends.
-    struct pollfd pollfd = { .fd = uffd, .events = POLLIN };
-    int nready = poll(&pollfd, 1, -1);
+    int nready = epoll_wait(epollfd, &event, 1, -1);
     if (nready < 0)
-      lperror("poll");
+      lperror("epoll_wait");
     ASSERT(nready == 1);
-    ASSERT(pollfd.revents & POLLIN);
+    assert(event.events & EPOLLIN);
 
     // Read message; We only expect page faults.
     struct uffd_msg msg;
