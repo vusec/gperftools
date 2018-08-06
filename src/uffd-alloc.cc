@@ -114,7 +114,7 @@ static void *uffd_poller_thread(void*) {
   if (epoll_ctl(epollfd, EPOLL_CTL_ADD, uffd, &event) < 0)
     lperror("epoll_ctl");
 
-  while (1) {
+  for (;;) {
     // Wait for message. We don't use a timeout, the thread just ends when the
     // main program ends.
     int nready = epoll_wait(epollfd, &event, 1, -1);
