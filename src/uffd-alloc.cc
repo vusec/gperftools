@@ -9,9 +9,9 @@
 #include <unistd.h>             // for syscall, sysconf, getpid
 #include <sys/syscall.h>        // for __NR_userfaultfd
 #include <sys/mman.h>           // for mmap, munmap, MADV_DONTNEED, etc
-#include <sys/ioctl.h>          // for ioctl, UFFD*
+#include <sys/ioctl.h>          // for ioctl
 #include <sys/epoll.h>          // for epoll_*
-#include <linux/userfaultfd.h>  // for 
+#include <linux/userfaultfd.h>  // for UFFD*
 #include <pthread.h>            // for pthread_*
 #include <string.h>             // for strerror
 #include <errno.h>              // for errno
