@@ -180,7 +180,7 @@ void initialize() {
   ldbg("uffd: initialize in process", getpid());
 
   // Register userfaultfd file descriptor to poll from.
-  if ((uffd = syscall(__NR_userfaultfd, 0)) < 0)
+  if ((uffd = syscall(__NR_userfaultfd, O_NONBLOCK)) < 0)
     llog(kCrash, "userfaultfd call failed");
 
   // Check ioctl features.
