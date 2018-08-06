@@ -15,6 +15,7 @@
 #include <string.h>             // for strerror
 #include <errno.h>              // for errno
 #include <poll.h>               // for poll, POLLIN, etc
+#include <fcntl.h>              // for O_NONBLOCK
 #include "base/basictypes.h"    // for PREDICT_FALSE
 #include "system-alloc.h"       // for SysAllocator, MmapSysAllocator, mmap_space
 #include "internal_logging.h"   // for Log, kLog, kCrash, ASSERT
@@ -187,7 +188,7 @@ void initialize() {
   struct uffdio_api api = { .api = UFFD_API, .features = 0 };
   if (ioctl(uffd, UFFDIO_API, &api) < 0)
     lperror("couldn't set userfaultfd api");
-  if (api.ioctls & (1 << _UFFDIO_REGISTER) == 0)
+  if (!(api.ioctls & (1 << _UFFDIO_REGISTER)))
     llog(kCrash, "userfaultfd REGISTER operation not supported");
 
   // Poll file descriptor from helper thread. pthread_create allocates a stack
@@ -230,7 +231,7 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
 
   ldbg("uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
 
-  if (reg.ioctls & (1 << _UFFDIO_COPY) == 0)
+  if (!(reg.ioctls & (1 << _UFFDIO_COPY)))
     llog(kCrash, "UFFDIO_COPY operation not supported on registered range");
 
   return ptr;
