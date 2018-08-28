@@ -111,7 +111,7 @@ static void *uffd_poller_thread(void*) {
     // main program ends.
     struct pollfd pollfd = { .fd = uffd, .events = POLLIN };
     int nready = poll(&pollfd, 1, -1);
-    if (nready < 0)
+    if (PREDICT_FALSE(nready < 0))
       lperror("poll");
     ASSERT(nready == 1);
     ASSERT(pollfd.revents & POLLIN);
