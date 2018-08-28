@@ -48,7 +48,7 @@ namespace tcmalloc_uffd {
 
 static char *mmapx(size_t size) {
   char *page = (char*)mmap(NULL, size, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
   if (page == MAP_FAILED)
     lperror("mmap of zeropage failed");
   return page;
