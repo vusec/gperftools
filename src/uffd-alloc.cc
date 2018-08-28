@@ -142,24 +142,27 @@ static void *uffd_poller_thread(void*) {
     ldbg("uffd:   span:", span, span->sizeclass, span->length);
 
 #ifdef RZ_FILL
-    // Build a page with filled redzones.
-    const void *page = fill_redzones(p, span);
-#else
-    // Allocate a zeroed page once and reuse it for next copy.
-    static const void *page = mmapx(kPageSize);
-#endif
-    // TODO: use UFFDIO_ZEROPAGE for zeroed pages (avoid memset(0) there)
-
-    // Copy pre-filled redzone page to target page. TODO: remove this
+    // Copy pre-filled redzone page to target page.
+    const void *rzpage = fill_redzones(p, span);
     struct uffdio_copy copy = {
       .dst = pfpage,
-      .src = reinterpret_cast<uintptr_t>(page),
+      .src = reinterpret_cast<uintptr_t>(rzpage),
       .len = kPageSize,
       .mode = 0
     };
     if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
       lperror("could not copy pre-filled uffd page");
-    ASSERT((size_t)copy.copy == kPageSize);
+    ASSERT(copy.copy == (long)kPageSize);
+#else
+    // Zero the target page.
+    struct uffdio_zeropage zero = {
+      .range = { .start = pfpage, .len = kPageSize },
+      .mode = 0
+    };
+    if (PREDICT_FALSE(ioctl(uffd, UFFDIO_ZEROPAGE, &zero)))
+      lperror("could not zero uffd page");
+    ASSERT(zero.zeropage == (long)kPageSize);
+#endif
 
     ldbg("uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + kPageSize));
   }
