@@ -42,14 +42,14 @@ namespace tcmalloc_uffd {
 #define check_pthread(call, errmsg)                               \
   do {                                                            \
     int ret = (call);                                             \
-    if (ret < 0)                                                  \
+    if (PREDICT_FALSE(ret < 0))                                   \
       Log(kCrash, __FILE__, __LINE__, errmsg ":", strerror(ret)); \
   } while(0)
 
 static char *mmapx(size_t size) {
   char *page = (char*)mmap(NULL, size, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
-  if (page == MAP_FAILED)
+  if (PREDICT_FALSE(page == MAP_FAILED))
     lperror("mmap of zeropage failed");
   return page;
 }
@@ -119,10 +119,10 @@ static void *uffd_poller_thread(void*) {
     // Read message; We only expect page faults.
     struct uffd_msg msg;
     int nread = read(uffd, &msg, sizeof (msg));
-    if (nread < 0)
+    if (PREDICT_FALSE(nread < 0))
       lperror("read on uffd");
     ASSERT(nread == sizeof (msg));
-    if (msg.event != UFFD_EVENT_PAGEFAULT)
+    if (PREDICT_FALSE(msg.event != UFFD_EVENT_PAGEFAULT))
       llog(kCrash, "received non-pagefault uffd event");
 
     // Look up size class through span.
@@ -157,7 +157,7 @@ static void *uffd_poller_thread(void*) {
       .len = kPageSize,
       .mode = 0
     };
-    if (ioctl(uffd, UFFDIO_COPY, &copy) < 0)
+    if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
       lperror("could not copy pre-filled uffd page");
     ASSERT((size_t)copy.copy == kPageSize);
 
