@@ -289,7 +289,11 @@ static bool points_to_redzone(void *ptr) {
 }
 
 extern "C" bool tcmalloc_is_redzone(void *ptr) {
+#ifdef DISABLE_SLOWPATH
+  return false;
+#else
   return points_to_redzone(ptr);
+#endif
 }
 
 extern "C" bool tcmalloc_is_redzone_multi(void *ptr, uint64_t naccess) {
