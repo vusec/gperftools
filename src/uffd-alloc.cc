@@ -24,6 +24,8 @@
 #include "thread_cache.h"       // for ThreadCache
 #include "uffd-alloc.h"         // for tcmalloc_uffd::SystemAlloc
 #include "redzone-check.h"      // for tcmalloc_is_redzone, etc
+//#include "noinstrument.h"       // for NOINSTRUMENT FIXME
+#define NOINSTRUMENT(name) __noinstrument##name
 
 using namespace tcmalloc;
 
@@ -55,7 +57,8 @@ static char *mmapx(size_t size) {
 }
 
 #ifdef RZ_FILL
-static void *fill_redzones(const PageID p, const Span *span) {
+
+static void *fill_heap_redzones(const PageID p, const Span *span) {
   // TODO: create pool of pages per size class with pre-filled redzones
   static char *buf = mmapx(kPageSize);
   memset(buf, 0, kPageSize);
@@ -95,7 +98,11 @@ static void *fill_redzones(const PageID p, const Span *span) {
 
   return buf;
 }
-#endif
+
+#define sizedstack_fill_redzones NOINSTRUMENT(sizedstack_fill_redzones)
+extern "C" void *sizedstack_fill_redzones(void *start, size_t len);
+
+#endif // RZ_FILL
 
 static int uffd = -1;
 
@@ -127,42 +134,43 @@ static void *uffd_poller_thread(void*) {
 
     // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
-    const Span *span = Static::pageheap()->GetDescriptor(p);
     uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
-    // XXX For large allocations, only the first and last page in the span are
-    // mapped originally, so I added mappings for the pages in between. The
-    // alternative is slow lookups by walking back one page at a time (see
-    // below), we should benchmark which is faster.
-    //for (PageID prev = p - 1; span == NULL && prev >= 0; prev--) {
-    //  span = Static::pageheap()->GetDescriptor(prev);
-    //}
-    ASSERT(span);
-    ASSERT(span->location == Span::IN_USE);
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p);
-    ldbg("uffd:   span:", span, span->sizeclass, span->length);
+    void *rzpage = nullptr;
 
 #ifdef RZ_FILL
-    // Copy pre-filled redzone page to target page.
-    const void *rzpage = fill_redzones(p, span);
-    struct uffdio_copy copy = {
-      .dst = pfpage,
-      .src = reinterpret_cast<uintptr_t>(rzpage),
-      .len = kPageSize,
-      .mode = 0
-    };
-    if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
-      lperror("could not copy pre-filled uffd page");
-    ASSERT(copy.copy == (long)kPageSize);
-#else
-    // Zero the target page.
-    struct uffdio_zeropage zero = {
-      .range = { .start = pfpage, .len = kPageSize },
-      .mode = 0
-    };
-    if (PREDICT_FALSE(ioctl(uffd, UFFDIO_ZEROPAGE, &zero)))
-      lperror("could not zero uffd page");
-    ASSERT(zero.zeropage == (long)kPageSize);
+    if (const Span *span = Static::pageheap()->GetDescriptor(p)) {
+        // Span found, this is a heap address.
+        ASSERT(span->location == Span::IN_USE);
+        ldbg("uffd:   span:", span, span->sizeclass, span->length);
+        rzpage = fill_heap_redzones(p, span);
+    } else if ((rzpage = sizedstack_fill_redzones((void*)pfpage, kPageSize))) {
+        // This is an unsafe stack address.
+        ldbg("uffd:   filled by sizedstack");
+    }
 #endif
+
+    if (rzpage) {
+      // Copy pre-filled redzone page to target page.
+      struct uffdio_copy copy = {
+        .dst = pfpage,
+        .src = reinterpret_cast<uintptr_t>(rzpage),
+        .len = kPageSize,
+        .mode = 0
+      };
+      if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
+        lperror("could not copy pre-filled uffd page");
+      ASSERT(copy.copy == (long)kPageSize);
+    } else {
+      // Zero the target page if no redzone page can be constructed.
+      struct uffdio_zeropage zero = {
+        .range = { .start = pfpage, .len = kPageSize },
+        .mode = 0
+      };
+      if (PREDICT_FALSE(ioctl(uffd, UFFDIO_ZEROPAGE, &zero)))
+        lperror("could not zero uffd page");
+      ASSERT(zero.zeropage == (long)kPageSize);
+    }
 
     ldbg("uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + kPageSize));
   }
@@ -212,31 +220,32 @@ void initialize() {
   ldbg("uffd: done initializing");
 }
 
-// This replaces TCMalloc_SystemAlloc in PageHeap::GrowHeap.
-void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
+// Register a memory range to the userfaultfd handler. Called internally and by
+// sizedstack runtime.
+extern "C" void tcmalloc_uffd_register_pages(void *start, size_t len) {
   if (PREDICT_FALSE(uffd == -1))
     initialize();
 
-  // Just wrap TCMalloc_SystemAlloc and register the allocated memory range for
-  // page faults.
-  void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
-  ASSERT(ptr != NULL);
-
   struct uffdio_register reg = {
-    .range = {
-      .start = reinterpret_cast<__u64>(ptr),
-      .len = *actual_size
-    },
+    .range = { .start = reinterpret_cast<__u64>(start), .len = len },
     .mode = UFFDIO_REGISTER_MODE_MISSING
   };
   if (ioctl(uffd, UFFDIO_REGISTER, &reg) < 0)
     lperror("uffd: could not register pages");
 
-  ldbg("uffd: registered", ptr, "-", (void*)((char*)ptr + *actual_size));
+  ldbg("uffd: registered", start, "-", (void*)((char*)start + len));
 
   if (!(reg.ioctls & (1 << _UFFDIO_COPY)))
     llog(kCrash, "UFFDIO_COPY operation not supported on registered range");
+}
 
+// This replaces TCMalloc_SystemAlloc in PageHeap::GrowHeap.
+void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
+  // Just wrap TCMalloc_SystemAlloc and register the allocated memory range for
+  // page faults.
+  void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
+  ASSERT(ptr != NULL);
+  tcmalloc_uffd_register_pages(ptr, *actual_size);
   return ptr;
 }
 
