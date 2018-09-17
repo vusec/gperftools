@@ -25,7 +25,7 @@
 #include "uffd-alloc.h"         // for tcmalloc_uffd::SystemAlloc
 #include "redzone-check.h"      // for tcmalloc_is_redzone, etc
 //#include "noinstrument.h"       // for NOINSTRUMENT FIXME
-#define NOINSTRUMENT(name) __noinstrument##name
+#define NOINSTRUMENT(name) __noinstrument_##name
 
 using namespace tcmalloc;
 
@@ -100,6 +100,7 @@ static void *fill_heap_redzones(const PageID p, const Span *span) {
 }
 
 #define sizedstack_fill_redzones NOINSTRUMENT(sizedstack_fill_redzones)
+__attribute__((weak))
 extern "C" void *sizedstack_fill_redzones(void *start, size_t len);
 
 #endif // RZ_FILL
@@ -136,17 +137,17 @@ static void *uffd_poller_thread(void*) {
     const PageID p = msg.arg.pagefault.address >> kPageShift;
     uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p);
-    void *rzpage = nullptr;
+    void *rzpage = NULL;
 
 #ifdef RZ_FILL
     if (const Span *span = Static::pageheap()->GetDescriptor(p)) {
-        // Span found, this is a heap address.
-        ASSERT(span->location == Span::IN_USE);
-        ldbg("uffd:   span:", span, span->sizeclass, span->length);
-        rzpage = fill_heap_redzones(p, span);
+      // Span found, this is a heap address.
+      ASSERT(span->location == Span::IN_USE);
+      ldbg("uffd:   span:", span, span->sizeclass, span->length);
+      rzpage = fill_heap_redzones(p, span);
     } else if ((rzpage = sizedstack_fill_redzones((void*)pfpage, kPageSize))) {
-        // This is an unsafe stack address.
-        ldbg("uffd:   filled by sizedstack");
+      // This is an unsafe stack address.
+      ldbg("uffd:   filled by sizedstack");
     }
 #endif
 
@@ -186,6 +187,21 @@ static void reset_uffd() {
   }
 }
 
+extern "C" {
+  // Dummy variable whose address is passed to the poller thread so that the
+  // sizedstack stack interceptor can identify the thread during interception.
+  int tcmalloc_uffd_thread_arg;
+
+  // Expose emergency malloc to sizedstack runtime library.
+  void tcmalloc_set_emergency_malloc(bool enable) {
+    ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
+    if (enable)
+      cache.SetUseEmergencyMalloc();
+    else
+      cache.ResetUseEmergencyMalloc();
+  }
+}
+
 void initialize() {
   ASSERT(uffd == -1);
 
@@ -208,7 +224,8 @@ void initialize() {
   ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
   cache.SetUseEmergencyMalloc();
   pthread_t tid;
-  check_pthread(pthread_create(&tid, NULL, &uffd_poller_thread, NULL),
+  check_pthread(pthread_create(&tid, NULL, &uffd_poller_thread,
+                               &tcmalloc_uffd_thread_arg),
                 "could not create uffd poller thread");
   // The uffd file descriptor is not inherited properly after fork() and the
   // poller thread is not started in the child, so we force reinitialization
@@ -225,6 +242,12 @@ void initialize() {
 extern "C" void tcmalloc_uffd_register_pages(void *start, size_t len) {
   if (PREDICT_FALSE(uffd == -1))
     initialize();
+
+  if ((uintptr_t)start % kPageSize != 0)
+    llog(kCrash, "uffd: registered range must be aligned to", kPageSize, "bytes");
+
+  if (len % kPageSize != 0)
+    llog(kCrash, "uffd: registered range must be a multiple of", kPageSize, "bytes");
 
   struct uffdio_register reg = {
     .range = { .start = reinterpret_cast<__u64>(start), .len = len },
