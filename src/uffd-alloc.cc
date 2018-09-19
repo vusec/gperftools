@@ -56,44 +56,55 @@ static char *mmapx(size_t size) {
   return page;
 }
 
+static unsigned long sysPageSize = 0;
+
 #ifdef RZ_FILL
 
-static void *fill_heap_redzones(const PageID p, const Span *span) {
+static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
   // TODO: create pool of pages per size class with pre-filled redzones
-  static char *buf = mmapx(kPageSize);
-  memset(buf, 0, kPageSize);
+  ASSERT(sysPageSize > 0);
+  static char *buf = mmapx(sysPageSize);
+  memset(buf, 0, sysPageSize);
 
   // For large allocations, put the redzone at the end of the last buf.
+  // TODO: surround large allocations with guard pages instead
   if (span->sizeclass == 0) {
-    if (span->start + span->length - 1 == p) {
-      memset(buf + kPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+    uintptr_t span_end = (span->start + span->length) << kPageShift;
+    if (pfpage >= span_end - sysPageSize && pfpage < span_end) {
+      memset(buf + sysPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
     }
     return buf;
   }
 
   // For small/medium allocations, fill all redzones of objects that are either
   // fully or partially in this page.
-  const uintptr_t page_start = p << kPageShift;
-  const uintptr_t page_end = page_start + kPageSize;
-  const ptrdiff_t bufshift = (uintptr_t)buf - page_start;
-
   const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
-  ASSERT(p >= span->start);
-  const size_t first_object_offset = (p - span->start) % objsize;
-  const size_t first_redzone_offset = objsize - kRedzoneSize - first_object_offset;
+  const uintptr_t span_start = span->start << kPageShift;
+  const ptrdiff_t span_offset = pfpage - span_start;
+  const size_t obj_before_pfpage = span_offset % objsize;
+  const ssize_t obj_in_pfpage = objsize - obj_before_pfpage;
+  const ssize_t lead_obj = obj_in_pfpage - kRedzoneSize;
+  char *next_rz = buf + lead_obj;
+  const char *buf_end = buf + sysPageSize;
 
-  ldbg("uffd: initialize redzones for page", p, "object size", objsize);
-  for (uintptr_t redzone = page_start + first_redzone_offset;
-       redzone < page_end; redzone += objsize) {
-    const size_t head_space = page_start - redzone;
-    const size_t tail_space = page_end - redzone;
-    const size_t strip_head = head_space < kRedzoneSize ? kRedzoneSize - head_space : 0;
-    const size_t strip_tail = tail_space < kRedzoneSize ? kRedzoneSize - tail_space : 0;
-    const size_t nbytes = kRedzoneSize - strip_head - strip_tail;
-    if (nbytes) {
-      //ldbg("uffd:   fill", nbytes, "redzone bytes at offset", redzone - page_start);
-      memset((char*)(redzone + strip_head + bufshift), kRedzoneValue, nbytes);
-    }
+  ldbg("uffd: initialize redzones for page at", (void*)pfpage, "with object size", objsize);
+
+  if (lead_obj < 0) {
+    ldbg("uffd:   fill", kRedzoneSize + lead_obj, "redzone bytes at offset 0");
+    memset(buf, kRedzoneValue, kRedzoneSize + lead_obj);
+    next_rz += objsize;
+  }
+
+  while (next_rz <= buf_end - kRedzoneSize) {
+    ldbg("uffd:   fill", kRedzoneSize, "redzone bytes at offset", next_rz - buf);
+    memset(next_rz, kRedzoneValue, kRedzoneSize);
+    next_rz += objsize;
+  }
+
+  const ptrdiff_t tail_rz = buf_end - next_rz;
+  if (tail_rz > 0) {
+    ldbg("uffd:   fill", tail_rz, "redzone bytes at offset", next_rz - buf);
+    memset(next_rz, kRedzoneValue, tail_rz);
   }
 
   return buf;
@@ -101,7 +112,7 @@ static void *fill_heap_redzones(const PageID p, const Span *span) {
 
 #define sizedstack_fill_redzones NOINSTRUMENT(sizedstack_fill_redzones)
 __attribute__((weak))
-extern "C" void *sizedstack_fill_redzones(void *start, size_t len);
+extern "C" void *sizedstack_fill_redzones(void *start);
 
 #endif // RZ_FILL
 
@@ -135,17 +146,17 @@ static void *uffd_poller_thread(void*) {
 
     // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
-    uintptr_t pfpage = msg.arg.pagefault.address & ~(kPageSize - 1);
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p);
+    uintptr_t pfpage = msg.arg.pagefault.address & ~(sysPageSize - 1);
     void *rzpage = NULL;
 
 #ifdef RZ_FILL
     if (const Span *span = Static::pageheap()->GetDescriptor(p)) {
       // Span found, this is a heap address.
       ASSERT(span->location == Span::IN_USE);
-      ldbg("uffd:   span:", span, span->sizeclass, span->length);
-      rzpage = fill_heap_redzones(p, span);
-    } else if ((rzpage = sizedstack_fill_redzones((void*)pfpage, kPageSize))) {
+      ldbg("uffd:   span at", (void*)(span->start << kPageShift), "with length", span->length);
+      rzpage = fill_heap_redzones(pfpage, span);
+    } else if ((rzpage = sizedstack_fill_redzones((void*)pfpage))) {
       // This is an unsafe stack address.
       ldbg("uffd:   filled by sizedstack");
     }
@@ -156,7 +167,7 @@ static void *uffd_poller_thread(void*) {
       struct uffdio_copy copy = {
         .dst = pfpage,
         .src = reinterpret_cast<uintptr_t>(rzpage),
-        .len = kPageSize,
+        .len = sysPageSize,
         .mode = 0
       };
       if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
@@ -205,6 +216,8 @@ extern "C" {
 void initialize() {
   ASSERT(uffd == -1);
 
+  sysPageSize = sysconf(_SC_PAGESIZE);
+
   ldbg("uffd: initialize in process", getpid());
 
   // Register userfaultfd file descriptor to poll from.
@@ -243,11 +256,11 @@ extern "C" void tcmalloc_uffd_register_pages(void *start, size_t len) {
   if (PREDICT_FALSE(uffd == -1))
     initialize();
 
-  if ((uintptr_t)start % kPageSize != 0)
-    llog(kCrash, "uffd: registered range must be aligned to", kPageSize, "bytes");
+  if ((uintptr_t)start % sysPageSize != 0)
+    llog(kCrash, "uffd: registered range must be aligned to", sysPageSize, "bytes");
 
-  if (len % kPageSize != 0)
-    llog(kCrash, "uffd: registered range must be a multiple of", kPageSize, "bytes");
+  if (len % sysPageSize != 0)
+    llog(kCrash, "uffd: registered range must be a multiple of", sysPageSize, "bytes");
 
   struct uffdio_register reg = {
     .range = { .start = reinterpret_cast<__u64>(start), .len = len },
