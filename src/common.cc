@@ -136,8 +136,19 @@ void SizeMap::Init() {
   int sc = 1;   // Next size class to assign
   int alignment = kAlignment;
   CHECK_CONDITION(kAlignment <= kMinAlign);
+
+#ifdef RZ_ALLOC
+  const size_t rz = kRedzoneSize;
+#else
+  const size_t rz = 0;
+#endif
+
   for (size_t size = kAlignment; size <= kMaxSize; size += alignment) {
     alignment = AlignmentForSize(size);
+
+    if (size <= rz)
+      continue;
+
     CHECK_CONDITION((size % alignment) == 0);
 
     int blocks_to_move = NumMoveSize(size) / 4;
@@ -146,20 +157,21 @@ void SizeMap::Init() {
       psize += kPageSize;
       // Allocate enough pages so leftover is less than 1/8 of total.
       // This bounds wasted space to at most 12.5%.
-      while ((psize % size) > (psize >> 3)) {
+      ASSERT(psize > rz);
+      while (((psize - rz) % size) > (psize >> 3)) {
         psize += kPageSize;
       }
       // Continue to add pages until there are at least as many objects in
       // the span as are needed when moving objects from the central
       // freelists and spans to the thread caches.
-    } while ((psize / size) < (blocks_to_move));
+    } while (((psize - rz) / size) < (blocks_to_move));
     const size_t my_pages = psize >> kPageShift;
 
     if (sc > 1 && my_pages == class_to_pages_[sc-1]) {
       // See if we can merge this into the previous class without
       // increasing the fragmentation of the previous class.
-      const size_t my_objects = (my_pages << kPageShift) / size;
-      const size_t prev_objects = (class_to_pages_[sc-1] << kPageShift)
+      const size_t my_objects = ((my_pages << kPageShift) - rz) / size;
+      const size_t prev_objects = ((class_to_pages_[sc-1] << kPageShift) - rz)
                                   / class_to_size_[sc-1];
       if (my_objects == prev_objects) {
         // Adjust last class to include this size
@@ -178,6 +190,12 @@ void SizeMap::Init() {
     Log(kCrash, __FILE__, __LINE__,
         "too many size classes: (found vs. max)", sc, kClassSizesMax);
   }
+
+#ifdef RZ_DEBUG
+  for (size_t c = 1; c <= num_size_classes; c++) {
+    Log(kLog, __FILE__, __LINE__,
+        "sizeclass", c, class_to_pages_[c-1], class_to_size_[c-1]);
+#endif
 
   // Initialize the mapping arrays
   int next_size = 0;
@@ -221,11 +239,17 @@ void SizeMap::Init() {
   // align = (1 << shift), malloc(i * align) % align == 0,
   //
   // for all align values up to kPageSize.
+#ifdef RZ_ALLOC
+  // Reserving space for a redzone in the loop above breaks the alignment check
+  // here
+  Log(kLog, __FILE__, __LINE__, "warning: not checking size class alignments");
+#else
   for (size_t align = kMinAlign; align <= kPageSize; align <<= 1) {
     for (size_t size = align; size < kPageSize; size += align) {
       CHECK_CONDITION(class_to_size_[SizeClass(size)] % align == 0);
     }
   }
+#endif
 
   // Initialize the num_objects_to_move array.
   for (size_t cl = 1; cl  < num_size_classes; ++cl) {

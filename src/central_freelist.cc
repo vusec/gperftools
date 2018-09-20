@@ -32,6 +32,7 @@
 // Author: Sanjay Ghemawat <opensource@google.com>
 
 #include "config.h"
+#include <cstring>
 #include <algorithm>
 #include "central_freelist.h"
 #include "internal_logging.h"  // for ASSERT, MESSAGE
@@ -288,6 +289,7 @@ int CentralFreeList::FetchFromOneSpansSafe(int N, void **start, void **end) {
 }
 
 int CentralFreeList::FetchFromOneSpans(int N, void **start, void **end) {
+  Log(kLog, __FILE__, __LINE__, "FetchFromOneSpans", N, start, end);
   if (tcmalloc::DLL_IsEmpty(&nonempty_)) return 0;
   Span* span = nonempty_.next;
 
@@ -349,6 +351,25 @@ void CentralFreeList::Populate() {
   char* ptr = reinterpret_cast<char*>(span->start << kPageShift);
   char* limit = ptr + (npages << kPageShift);
   const size_t size = Static::sizemap()->ByteSizeForClass(size_class_);
+
+  // Allocate and initialize a redzone at the start of each span.
+#ifdef RZ_ALLOC
+  ASSERT(npages > 0);
+  ASSERT(size_class_ > 0);
+  ASSERT(kRedzoneSize % kAlignment == 0);
+  ASSERT(limit - ptr >= kRedzoneSize + size);
+
+# if defined(RZ_FILL) && !defined(RZ_REUSE)
+#  ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "fill redzone at start of span at", (void*)ptr);
+#  endif
+  ASSERT(ptr + size + kRedzoneSize <= limit);
+  memset(ptr, kRedzoneValue, kRedzoneSize);
+# endif
+
+  ptr += kRedzoneSize;
+#endif
+
   int num = 0;
   while (ptr + size <= limit) {
     *tail = ptr;

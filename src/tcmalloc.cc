@@ -1324,7 +1324,7 @@ static inline size_t AddRedzone(size_t size) {
   return size;
 }
 
-static inline void FillRedzone(void *ptr, size_t allocsize) {
+static inline void FillRedzoneAtEnd(void *ptr, size_t allocsize) {
 #if defined(RZ_FILL) && !defined(RZ_REUSE)
 # ifdef RZ_DEBUG
   Log(kLog, __FILE__, __LINE__, "fill redzone at end of", allocsize, "bytes");
@@ -1362,7 +1362,9 @@ static void* do_malloc_pages(ThreadCache* heap, size_t size) {
     ReportLargeAlloc(num_pages, result);
   }
 
-  FillRedzone(result, num_pages * kPageSize);
+  // TODO: allocate + mprotect guard pages instead of a small redzone
+  FillRedzoneAtEnd(result, num_pages * kPageSize);
+
   return result;
 }
 
@@ -1399,7 +1401,7 @@ ATTRIBUTE_ALWAYS_INLINE inline void* do_malloc(size_t size) {
     ptr = CheckedMallocResult(cache->Allocate(allocated_size, cl, nop_oom_handler));
   }
 
-  FillRedzone(ptr, allocated_size);
+  FillRedzoneAtEnd(ptr, allocated_size);
   return ptr;
 }
 
@@ -1670,7 +1672,7 @@ void* do_memalign_pages(size_t align, size_t size) {
     Span* trailer = Static::pageheap()->Split(span, needed);
     Static::pageheap()->Delete(trailer);
   }
-  FillRedzone((void*)(span->start << kPageShift), span->length * kPageSize);
+  FillRedzoneAtEnd((void*)(span->start << kPageShift), span->length * kPageSize);
   return SpanToMallocResult(span);
 }
 
@@ -1919,7 +1921,7 @@ static void * malloc_fast_path(size_t size) {
   }
 
   void *ptr = CheckedMallocResult(cache->Allocate(allocated_size, cl, OOMHandler));
-  FillRedzone(ptr, allocated_size);
+  FillRedzoneAtEnd(ptr, allocated_size);
   return ptr;
 }
 

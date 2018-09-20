@@ -77,24 +77,22 @@ static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
   }
 
   // For small/medium allocations, fill all redzones of objects that are either
-  // fully or partially in this page.
+  // fully or partially in this page. Each slot starts with a redzone.
   const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
   const uintptr_t span_start = span->start << kPageShift;
   const ptrdiff_t span_offset = pfpage - span_start;
   const size_t obj_before_pfpage = span_offset % objsize;
-  const ssize_t obj_in_pfpage = objsize - obj_before_pfpage;
-  const ssize_t lead_obj = obj_in_pfpage - kRedzoneSize;
-  char *next_rz = buf + lead_obj;
+  const ssize_t lead_rz = kRedzoneSize - obj_before_pfpage;
   const char *buf_end = buf + sysPageSize;
 
   ldbg("uffd: initialize redzones for page at", (void*)pfpage, "with object size", objsize);
 
-  if (lead_obj < 0) {
-    ldbg("uffd:   fill", kRedzoneSize + lead_obj, "redzone bytes at offset 0");
-    memset(buf, kRedzoneValue, kRedzoneSize + lead_obj);
-    next_rz += objsize;
+  if (lead_rz > 0) {
+    ldbg("uffd:   fill", lead_rz, "redzone bytes at offset 0");
+    memset(buf, kRedzoneValue, lead_rz);
   }
 
+  char *next_rz = buf - obj_before_pfpage + objsize;
   while (next_rz <= buf_end - kRedzoneSize) {
     ldbg("uffd:   fill", kRedzoneSize, "redzone bytes at offset", next_rz - buf);
     memset(next_rz, kRedzoneValue, kRedzoneSize);
@@ -198,20 +196,9 @@ static void reset_uffd() {
   }
 }
 
-extern "C" {
-  // Dummy variable whose address is passed to the poller thread so that the
-  // sizedstack stack interceptor can identify the thread during interception.
-  int tcmalloc_uffd_thread_arg;
-
-  // Expose emergency malloc to sizedstack runtime library.
-  void tcmalloc_set_emergency_malloc(bool enable) {
-    ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
-    if (enable)
-      cache.SetUseEmergencyMalloc();
-    else
-      cache.ResetUseEmergencyMalloc();
-  }
-}
+// Dummy variable whose address is passed to the poller thread so that the
+// sizedstack stack interceptor can identify the thread during interception.
+extern "C" { int tcmalloc_uffd_thread_arg; }
 
 void initialize() {
   ASSERT(uffd == -1);
@@ -303,6 +290,7 @@ bool SystemRelease(void *start, size_t length) {
 } // end namespace tcmalloc_uffd
 #endif // RZ_REUSE
 
+#ifndef DISABLE_SLOWPATH
 static bool points_to_redzone(void *ptr) {
   ldbg("check redzone at", ptr);
 
@@ -326,24 +314,40 @@ static bool points_to_redzone(void *ptr) {
     return addr + kRedzoneSize >= span_end;
   }
 
-  // Small objects have a redzone at the end of each allocation unit.
-  const size_t size = Static::sizemap()->ByteSizeForClass(span->sizeclass);
+  // Small objects have a redzone at the start of each allocation unit.
+  const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
   const size_t span_offset = addr - base;
-  const size_t object_offset = span_offset % size;
-  return object_offset + kRedzoneSize >= size;
+  const size_t object_offset = span_offset % objsize;
+  return object_offset < kRedzoneSize;
 }
+#endif // !DISABLE_SLOWPATH
 
-extern "C" bool tcmalloc_is_redzone(void *ptr) {
+extern "C" {
+  // Expose emergency malloc to sizedstack runtime library.
+  void tcmalloc_set_emergency_malloc(bool enable) {
+    ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
+    if (enable) {
+      ldbg("uffd: enabling emergency malloc");
+      cache.SetUseEmergencyMalloc();
+    } else {
+      ldbg("uffd: disabling emergency malloc");
+      cache.ResetUseEmergencyMalloc();
+    }
+  }
+
+  // Slow path check for heap.
+  bool tcmalloc_is_redzone(void *ptr) {
 #ifdef DISABLE_SLOWPATH
-  return false;
+    return false;
 #else
-  return points_to_redzone(ptr);
+    return points_to_redzone(ptr);
 #endif
-}
+  }
 
-extern "C" bool tcmalloc_is_redzone_multi(void *ptr, uint64_t naccess) {
-  llog(kCrash, "multibyte checks not yet supported");
-  return false;
+  bool tcmalloc_is_redzone_multi(void *ptr, uint64_t naccess) {
+    llog(kCrash, "multibyte checks not yet supported");
+    return false;
+  }
 }
 
 #endif // RZ_ALLOC
