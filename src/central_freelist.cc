@@ -140,7 +140,7 @@ void CentralFreeList::ReleaseToSpans(void* object) {
     lock_.Unlock();
     {
       SpinLockHolder h(Static::pageheap_lock());
-      Static::pageheap()->Delete(span);
+      DeleteAndUnmapSpan(span);
     }
     lock_.Lock();
   } else {
@@ -402,6 +402,20 @@ size_t CentralFreeList::OverheadBytes() {
   ASSERT(object_size > 0);
   const size_t overhead_per_span = (pages_per_span * kPageSize) % object_size;
   return num_spans_ * overhead_per_span;
+}
+
+void DeleteAndUnmapSpan(Span *span) {
+#ifdef RZ_REUSE
+  // Have the kernel remove page mappings for pages in this span to assert that
+  // page faults happen to reinitialize redzones.
+  void *start = reinterpret_cast<void*>(span->start << kPageShift);
+  size_t length = span->length << kPageShift;
+  Static::pageheap()->Delete(span);
+  if (madvise(start, length, MADV_DONTNEED) < 0)
+    Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
+#else
+  Static::pageheap()->Delete(span);
+#endif
 }
 
 }  // namespace tcmalloc

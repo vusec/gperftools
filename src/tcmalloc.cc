@@ -1501,22 +1501,9 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
   // Zero out redzones for large allocations to avoid false positives in
   // fast path redzone check.
   SubtractAndZeroRedzone((void*)((span->start + span->length) << kPageShift));
-  ptr = SubtractAndZeroRedzone(ptr);
+  SubtractAndZeroRedzone(ptr);
 
-#ifdef RZ_REUSE
-  // Have the kernel remove page mappings for pages in this span to assert that
-  // page faults happen to reinitialize redzones.
-  // FIXME: this is currently only done for large allocations. Spans containing
-  // small allocations also need it if the size class does not change (maybe we
-  // should be doing that in central_freelist.cc).
-  void *start = reinterpret_cast<void*>(span->start << kPageShift);
-  size_t length = span->length << kPageShift;
-  Static::pageheap()->Delete(span);
-  if (madvise(start, length, MADV_DONTNEED) < 0)
-    Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
-#else
-  Static::pageheap()->Delete(span);
-#endif
+  DeleteAndUnmapSpan(span);
 }
 
 // Helper for the object deletion (free, delete, etc.).  Inputs:
