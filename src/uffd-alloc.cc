@@ -304,7 +304,6 @@ static bool points_to_redzone(void *ptr) {
   // Find span.
   const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
   const PageID p = addr >> kPageShift;
-  // TODO: use Static::pageheap()->TryGetSizeClass to avoid expensive span lookup.
   const tcmalloc::Span *span = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
   // Ignore non-heap pointers.
