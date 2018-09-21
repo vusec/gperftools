@@ -66,11 +66,18 @@ static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
   static char *buf = mmapx(sysPageSize);
   memset(buf, 0, sysPageSize);
 
-  // For large allocations, put the redzone at the end of the last buf.
-  // TODO: surround large allocations with guard pages instead
+  // For large allocations, put the redzones at the start of the first page and
+  // the end of the last page.
+  // XXX: surround large allocations with guard pages instead?
   if (span->sizeclass == 0) {
-    uintptr_t span_end = (span->start + span->length) << kPageShift;
-    if (pfpage >= span_end - sysPageSize && pfpage < span_end) {
+    const uintptr_t span_start = span->start << kPageShift;
+    const uintptr_t span_end = (span->start + span->length) << kPageShift;
+    if (pfpage == span_start) {
+      // lower bound redzone
+      memset(buf, kRedzoneValue, kRedzoneSize);
+    }
+    else if (pfpage == span_end - sysPageSize) {
+      // upper bound redzone
       memset(buf + sysPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
     }
     return buf;
@@ -294,29 +301,29 @@ bool SystemRelease(void *start, size_t length) {
 static bool points_to_redzone(void *ptr) {
   ldbg("check redzone at", ptr);
 
+  // Find span.
   const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
   const PageID p = addr >> kPageShift;
+  // TODO: use Static::pageheap()->TryGetSizeClass to avoid expensive span lookup.
   const tcmalloc::Span *span = tcmalloc::Static::pageheap()->GetDescriptor(p);
 
-  // Ignore if we cannot access span.
-  ASSERT(span);
+  // Ignore non-heap pointers.
   if (PREDICT_FALSE(!span)) {
-    ldbg("cannot find span for", ptr, "on page", p);
+    ldbg("not a heap pointer: cannot find span for", ptr, "on page", p);
     return false;
   }
 
-  const uintptr_t base = span->start << kPageShift;
-  ASSERT(base <= addr);
+  const uintptr_t span_start = span->start << kPageShift;
+  const size_t span_offset = addr - span_start;
 
   // Large objects have the redzone at the end of the last page.
   if (PREDICT_FALSE(span->sizeclass == 0)) {
-    const uintptr_t span_end = base + span->length * kPageSize;
-    return addr + kRedzoneSize >= span_end;
+    const size_t span_size = span->length << kPageShift;
+    return span_offset < kRedzoneSize || span_offset >= span_size - kRedzoneSize;
   }
 
   // Small objects have a redzone at the start of each allocation unit.
   const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
-  const size_t span_offset = addr - base;
   const size_t object_offset = span_offset % objsize;
   return object_offset < kRedzoneSize;
 }

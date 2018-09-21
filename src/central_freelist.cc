@@ -289,7 +289,6 @@ int CentralFreeList::FetchFromOneSpansSafe(int N, void **start, void **end) {
 }
 
 int CentralFreeList::FetchFromOneSpans(int N, void **start, void **end) {
-  Log(kLog, __FILE__, __LINE__, "FetchFromOneSpans", N, start, end);
   if (tcmalloc::DLL_IsEmpty(&nonempty_)) return 0;
   Span* span = nonempty_.next;
 

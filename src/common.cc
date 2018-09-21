@@ -195,6 +195,7 @@ void SizeMap::Init() {
   for (size_t c = 1; c <= num_size_classes; c++) {
     Log(kLog, __FILE__, __LINE__,
         "sizeclass", c, class_to_pages_[c-1], class_to_size_[c-1]);
+  }
 #endif
 
   // Initialize the mapping arrays
@@ -241,15 +242,17 @@ void SizeMap::Init() {
   // for all align values up to kPageSize.
 #ifdef RZ_ALLOC
   // Reserving space for a redzone in the loop above breaks the alignment check
-  // here
+  // here.
+# ifdef RZ_DEBUG
   Log(kLog, __FILE__, __LINE__, "warning: not checking size class alignments");
-#else
+# endif
+#else // RZ_ALLOC
   for (size_t align = kMinAlign; align <= kPageSize; align <<= 1) {
     for (size_t size = align; size < kPageSize; size += align) {
       CHECK_CONDITION(class_to_size_[SizeClass(size)] % align == 0);
     }
   }
-#endif
+#endif // !RZ_ALLOC
 
   // Initialize the num_objects_to_move array.
   for (size_t cl = 1; cl  < num_size_classes; ++cl) {
