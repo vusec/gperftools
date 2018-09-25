@@ -172,7 +172,14 @@ static const unsigned char kRedzoneValue = RZ_VALUE;
 #elif defined(RZ_REUSE)
 # error "cannot have RZ_REUSE without RZ_ALLOC"
 
-#endif // RZ_ALLOC
+#else // RZ_ALLOC
+
+static const size_t kRedzoneSize = 0;
+
+#endif // !RZ_ALLOC
+
+// Enforce large alignment of large allocations by increasing the redzone size.
+static const size_t kLargeRedzoneSize = 1024;
 
 namespace tcmalloc {
 

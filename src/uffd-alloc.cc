@@ -325,7 +325,7 @@ static bool points_to_redzone(void *ptr) {
   // Large objects have the redzone at the end of the last page.
   if (PREDICT_FALSE(span->sizeclass == 0)) {
     const size_t span_size = span->length << kPageShift;
-    return span_offset < kRedzoneSize || span_offset >= span_size - kRedzoneSize;
+    return span_offset < kLargeRedzoneSize || span_offset >= span_size - kLargeRedzoneSize;
   }
 
   // Small objects have a redzone at the start of each allocation unit.
