@@ -174,6 +174,8 @@ static const unsigned char kRedzoneValue = RZ_VALUE;
 
 #endif // RZ_ALLOC
 
+static const size_t kSysPageSize = 4096; // sysconf(_SC_PAGESIZE)
+
 namespace tcmalloc {
 
 // Convert byte size into pages.  This won't overflow, but may return
