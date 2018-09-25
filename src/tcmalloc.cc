@@ -1618,7 +1618,7 @@ inline size_t GetSizeWithCallback(const void* ptr,
   }
 
   // Large allocations have lower+upper redzones.
-  return span->length << kPageShift - 2 * OptRedzoneSize;
+  return (span->length << kPageShift) - 2 * OptRedzoneSize;
 }
 
 // This lets you call back to a given function pointer if ptr is invalid.
