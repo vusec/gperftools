@@ -38,6 +38,9 @@ using namespace tcmalloc;
 # define ldbg(...)
 #endif
 
+// Uncomment to log slow path redzone checks on the heap.
+//#define RZ_DEBUG_VERBOSE
+
 #ifdef RZ_REUSE
 namespace tcmalloc_uffd {
 
@@ -299,7 +302,9 @@ bool SystemRelease(void *start, size_t length) {
 
 #ifndef DISABLE_SLOWPATH
 static bool points_to_redzone(void *ptr) {
+#ifdef RZ_DEBUG_VERBOSE
   ldbg("check redzone at", ptr);
+#endif
 
   // Find span.
   const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
@@ -308,7 +313,9 @@ static bool points_to_redzone(void *ptr) {
 
   // Ignore non-heap pointers.
   if (PREDICT_FALSE(!span)) {
+#ifdef RZ_DEBUG_VERBOSE
     ldbg("not a heap pointer: cannot find span for", ptr, "on page", p);
+#endif
     return false;
   }
 

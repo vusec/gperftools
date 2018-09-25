@@ -1155,10 +1155,10 @@ static const size_t OptRedzoneSize = 0;
 
 static inline size_t AddRedzone(size_t size) {
 #ifdef RZ_ALLOC
-  size += kRedzoneSize;
 # ifdef RZ_DEBUG
-  Log(kLog, __FILE__, __LINE__, "pad allocsize to", size);
+  Log(kLog, __FILE__, __LINE__, "pad allocsize from", size, "to", size + kRedzoneSize);
 # endif
+  size += kRedzoneSize;
 #endif
   return size;
 }
@@ -1168,7 +1168,7 @@ static inline void *AddAndFillRedzoneAtStart(void *startptr) {
 #ifdef RZ_ALLOC
 # if defined(RZ_FILL) && !defined(RZ_REUSE)
 #  ifdef RZ_DEBUG
-  Log(kLog, __FILE__, __LINE__, "fill redzone at", ptr);
+  Log(kLog, __FILE__, __LINE__, "fill redzone at", startptr);
 #  endif
   memset(ptr, kRedzoneValue, kRedzoneSize);
 # endif
@@ -1177,12 +1177,13 @@ static inline void *AddAndFillRedzoneAtStart(void *startptr) {
   return ptr;
 }
 
-static inline void FillRedzoneAtEnd(void *ptr, size_t allocsize) {
+static inline void FillRedzoneAtEnd(void *startptr, size_t allocsize) {
 #if defined(RZ_FILL) && !defined(RZ_REUSE)
+  char *ptr = static_cast<char*>(startptr) + allocsize - kRedzoneSize;
 # ifdef RZ_DEBUG
-  Log(kLog, __FILE__, __LINE__, "fill redzone at end of", allocsize, "bytes");
+  Log(kLog, __FILE__, __LINE__, "fill redzone at", (void*)ptr, " at the end of bytes:", allocsize);
 # endif
-  memset((char*)ptr + allocsize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+  memset(ptr, kRedzoneValue, kRedzoneSize);
 #endif
 }
 
@@ -1226,6 +1227,10 @@ static inline ATTRIBUTE_ALWAYS_INLINE void* SpanToMallocResult(Span *span) {
   // base pointer.
   FillRedzoneAtEnd(result, span->length << kPageShift);
   result = AddAndFillRedzoneAtStart(result);
+
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "large allocation of", span->length << kPageShift, "bytes:", result);
+#endif
 
   return CheckedMallocResult(result);
 }
