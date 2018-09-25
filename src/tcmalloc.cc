@@ -1500,8 +1500,11 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
 
   // Zero out redzones for large allocations to avoid false positives in
   // fast path redzone check.
-  SubtractAndZeroRedzone((void*)((span->start + span->length) << kPageShift));
+  // FIXME: also do this on small allocations? should we do this at all? maybe
+  // do it in DeleteAndUnmapSpan
+  ASSERT((uintptr_t)ptr - kRedzoneSize == span->start << kPageShift);
   SubtractAndZeroRedzone(ptr);
+  SubtractAndZeroRedzone((void*)((span->start + span->length) << kPageShift));
 
   DeleteAndUnmapSpan(span);
 }
