@@ -6,7 +6,7 @@
 #ifndef _GNU_SOURCE
 # define _GNU_SOURCE
 #endif
-#include <unistd.h>             // for syscall, getpid
+#include <unistd.h>             // for syscall, sysconf, getpid
 #include <sys/syscall.h>        // for __NR_userfaultfd
 #include <sys/mman.h>           // for mmap, munmap, MADV_DONTNEED, etc
 #include <sys/ioctl.h>          // for ioctl
@@ -56,12 +56,15 @@ static char *mmapx(size_t size) {
   return page;
 }
 
+static unsigned long sysPageSize = 0;
+
 #ifdef RZ_FILL
 
 static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
   // TODO: create pool of pages per size class with pre-filled redzones
-  static char *buf = mmapx(kSysPageSize);
-  memset(buf, 0, kSysPageSize);
+  ASSERT(sysPageSize > 0);
+  static char *buf = mmapx(sysPageSize);
+  memset(buf, 0, sysPageSize);
 
   // For large allocations, put the redzones at the start of the first page and
   // the end of the last page.
@@ -73,9 +76,9 @@ static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
       // lower bound redzone
       memset(buf, kRedzoneValue, kRedzoneSize);
     }
-    else if (pfpage == span_end - kSysPageSize) {
+    else if (pfpage == span_end - sysPageSize) {
       // upper bound redzone
-      memset(buf + kSysPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+      memset(buf + sysPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
     }
     return buf;
   }
@@ -87,7 +90,7 @@ static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
   const ptrdiff_t span_offset = pfpage - span_start;
   const size_t obj_before_pfpage = span_offset % objsize;
   const ssize_t lead_rz = kRedzoneSize - obj_before_pfpage;
-  const char *buf_end = buf + kSysPageSize;
+  const char *buf_end = buf + sysPageSize;
 
   ldbg("uffd: initialize redzones for page at", (void*)pfpage, "with object size", objsize);
 
@@ -149,7 +152,7 @@ static void *uffd_poller_thread(void*) {
     // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
     ldbg("uffd: page fault", (void*)msg.arg.pagefault.address, p);
-    uintptr_t pfpage = msg.arg.pagefault.address & ~(kSysPageSize - 1);
+    uintptr_t pfpage = msg.arg.pagefault.address & ~(sysPageSize - 1);
     void *rzpage = NULL;
 
 #ifdef RZ_FILL
@@ -169,7 +172,7 @@ static void *uffd_poller_thread(void*) {
       struct uffdio_copy copy = {
         .dst = pfpage,
         .src = reinterpret_cast<uintptr_t>(rzpage),
-        .len = kSysPageSize,
+        .len = sysPageSize,
         .mode = 0
       };
       if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
@@ -206,6 +209,8 @@ extern "C" { int tcmalloc_uffd_thread_arg; }
 
 void initialize() {
   ASSERT(uffd == -1);
+
+  sysPageSize = sysconf(_SC_PAGESIZE);
 
   ldbg("uffd: initialize in process", getpid());
 
@@ -245,11 +250,11 @@ extern "C" void tcmalloc_uffd_register_pages(void *start, size_t len) {
   if (PREDICT_FALSE(uffd == -1))
     initialize();
 
-  if ((uintptr_t)start % kSysPageSize != 0)
-    llog(kCrash, "uffd: registered range must be aligned to", kSysPageSize, "bytes");
+  if ((uintptr_t)start % sysPageSize != 0)
+    llog(kCrash, "uffd: registered range must be aligned to", sysPageSize, "bytes");
 
-  if (len % kSysPageSize != 0)
-    llog(kCrash, "uffd: registered range must be a multiple of", kSysPageSize, "bytes");
+  if (len % sysPageSize != 0)
+    llog(kCrash, "uffd: registered range must be a multiple of", sysPageSize, "bytes");
 
   struct uffdio_register reg = {
     .range = { .start = reinterpret_cast<__u64>(start), .len = len },
