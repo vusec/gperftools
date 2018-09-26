@@ -179,7 +179,7 @@ static const size_t kRedzoneSize = 0;
 #endif // !RZ_ALLOC
 
 // Enforce large alignment of large allocations by increasing the redzone size.
-static const size_t kLargeRedzoneSize = 1024;
+static const size_t kLargeRedzoneSize = 4096;
 
 namespace tcmalloc {
 
