@@ -40,6 +40,10 @@
 #include "page_heap.h"         // for PageHeap
 #include "static_vars.h"       // for Static
 
+#ifdef RZ_REUSE
+#include <sys/mman.h>          // for madvise
+#endif
+
 using std::min;
 using std::max;
 
