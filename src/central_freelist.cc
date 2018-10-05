@@ -142,6 +142,7 @@ void CentralFreeList::ReleaseToSpans(void* object) {
 
     // Release central list lock while operating on pageheap
     lock_.Unlock();
+    ZeroRedzonesInSpan(span);
     {
       SpinLockHolder h(Static::pageheap_lock());
       DeleteAndUnmapSpan(span);
@@ -406,6 +407,37 @@ size_t CentralFreeList::OverheadBytes() {
   ASSERT(object_size > 0);
   const size_t overhead_per_span = (pages_per_span * kPageSize) % object_size;
   return num_spans_ * overhead_per_span;
+}
+
+//#define ZERO_SMALL_REDZONES
+
+void ZeroRedzonesInSpan(Span *span) {
+  const uintptr_t start = span->start << kPageShift;
+  const uintptr_t end = (span->start + span->length) << kPageShift;
+
+  if (span->sizeclass == 0) {
+    // Large allocation: large redzones at start and end
+    memset(reinterpret_cast<void*>(start), 0, kLargeRedzoneSize);
+    memset(reinterpret_cast<void*>(end - kLargeRedzoneSize), 0, kLargeRedzoneSize);
+#ifdef RZ_DEBUG
+    Log(kLog, __FILE__, __LINE__, "zeroed 2 large redzones around large "
+        "allocation of", span->length, "pages");
+#endif
+#ifdef ZERO_SMALL_REDZONES
+  } else {
+    // Small allocation: a small redzone at the start of each object slot
+    const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
+    const uintptr_t end = (span->start + span->length) << kPageShift;
+    unsigned n = 0;
+    for (uintptr_t p = start; p <= end - kRedzoneSize; p += objsize) {
+      memset(reinterpret_cast<void*>(p), 0, kRedzoneSize);
+      n++;
+    }
+# ifdef RZ_DEBUG
+    Log(kLog, __FILE__, __LINE__, "zeroed", n, "redzones with sizeclass", objsize);
+# endif
+#endif // ZERO_SMALL_REDZONES
+  }
 }
 
 void DeleteAndUnmapSpan(Span *span) {

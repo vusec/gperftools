@@ -1181,20 +1181,6 @@ static inline void FillRedzoneAtEnd(void *startptr, size_t allocsize, size_t rzs
 #endif
 }
 
-static inline void *SubtractAndZeroLargeRedzone(void *endptr) {
-  char *ptr = static_cast<char*>(endptr);
-#ifdef RZ_ALLOC
-  ptr -= kLargeRedzoneSize;
-# ifdef RZ_FILL
-#  ifdef RZ_DEBUG
-  Log(kLog, __FILE__, __LINE__, "zeroing redzone at", (void*)ptr);
-#  endif
-  memset(ptr, 0, kLargeRedzoneSize);
-# endif
-#endif
-  return ptr;
-}
-
 //-------------------------------------------------------------------
 // Helpers for the exported routines below
 //-------------------------------------------------------------------
@@ -1495,12 +1481,8 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
 
   // Zero out redzones for large allocations to avoid false positives in
   // fast path redzone check.
-  // FIXME: also do this on small allocations? should we do this at all? maybe
-  // do it in DeleteAndUnmapSpan
-  ASSERT((uintptr_t)ptr - kRedzoneSize == span->start << kPageShift);
-  SubtractAndZeroLargeRedzone(ptr);
-  SubtractAndZeroLargeRedzone((void*)((span->start + span->length) << kPageShift));
-
+  ASSERT((uintptr_t)ptr - kLargeRedzoneSize == span->start << kPageShift);
+  ZeroRedzonesInSpan(span);
   DeleteAndUnmapSpan(span);
 }
 
