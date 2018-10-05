@@ -88,7 +88,7 @@ static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
 
   // For small/medium allocations, fill all redzones of objects that are either
   // fully or partially in this page. Each slot starts with a redzone.
-  const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
+  const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
   const uintptr_t span_start = span->start << kPageShift;
   const ptrdiff_t span_offset = pfpage - span_start;
   const size_t obj_before_pfpage = span_offset % objsize;
@@ -329,7 +329,7 @@ static bool points_to_redzone(void *ptr) {
   }
 
   // Small objects have a redzone at the start of each allocation unit.
-  const size_t objsize = Static::sizemap()->ByteSizeForClass(span->sizeclass);
+  const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
   const size_t object_offset = span_offset % objsize;
   return object_offset < kRedzoneSize;
 }
