@@ -153,6 +153,9 @@ static const int kAddressBits = 8 * sizeof(void*);
 # ifndef RZ_SIZE
 #  error "RZ_SIZE must be defined for RZ_ALLOC"
 # endif
+# if RZ_SIZE % 16 != 0
+#  error "RZ_SIZE must be a multiple of 16 for alignment reasons"
+# endif
 static const size_t kRedzoneSize = RZ_SIZE;
 
 # ifdef RZ_FILL
