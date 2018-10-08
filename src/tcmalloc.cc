@@ -1052,9 +1052,9 @@ static ATTRIBUTE_NOINLINE size_t nallocx_slow(size_t size, int flags) {
   uint32 cl;
   bool ok = size_class_with_alignment(size, align, &cl);
   if (ok) {
-    return Static::sizemap()->ByteSizeForClass(cl);
+    return Static::sizemap()->ByteSizeForClass(cl) - kRedzoneSize;
   } else {
-    return tcmalloc::pages(size) << kPageShift;
+    return (tcmalloc::pages(size) << kPageShift) - 2 * kLargeRedzoneSize;
   }
 }
 
@@ -1071,7 +1071,7 @@ size_t tc_nallocx(size_t size, int flags) {
   uint32 cl;
   // size class 0 is only possible if malloc is not yet initialized
   if (Static::sizemap()->GetSizeClass(size, &cl) && cl != 0) {
-    return Static::sizemap()->ByteSizeForClass(cl);
+    return Static::sizemap()->ByteSizeForClass(cl) - kRedzoneSize;
   } else {
     return nallocx_slow(size, 0);
   }
