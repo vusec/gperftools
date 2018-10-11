@@ -158,6 +158,9 @@ static const int kAddressBits = 8 * sizeof(void*);
 # endif
 static const size_t kRedzoneSize = RZ_SIZE;
 
+// Enforce large alignment of large allocations by increasing the redzone size.
+static const size_t kLargeRedzoneSize = 4096;
+
 # ifdef RZ_FILL
 #  ifndef RZ_VALUE
 #   error "RZ_VALUE must be defined for RZ_FILL"
@@ -178,11 +181,9 @@ static const unsigned char kRedzoneValue = RZ_VALUE;
 #else // RZ_ALLOC
 
 static const size_t kRedzoneSize = 0;
+static const size_t kLargeRedzoneSize = 0;
 
 #endif // !RZ_ALLOC
-
-// Enforce large alignment of large allocations by increasing the redzone size.
-static const size_t kLargeRedzoneSize = 4096;
 
 namespace tcmalloc {
 
