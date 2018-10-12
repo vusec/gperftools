@@ -409,9 +409,14 @@ size_t CentralFreeList::OverheadBytes() {
   return num_spans_ * overhead_per_span;
 }
 
-//#define ZERO_SMALL_REDZONES
-
 void ZeroRedzonesInSpan(Span *span) {
+#ifdef RZ_REUSE
+  // No need to overwrite with zeroes, the pge fault handler will do that before
+  // initalizing the new redzones
+  (void)span;
+#else
+  // Overwrite redzones with zeroes to avoid false positives when the pages are
+  // reused for spans with another size class
   const uintptr_t start = span->start << kPageShift;
   const uintptr_t end = (span->start + span->length) << kPageShift;
 
@@ -419,11 +424,10 @@ void ZeroRedzonesInSpan(Span *span) {
     // Large allocation: large redzones at start and end
     memset(reinterpret_cast<void*>(start), 0, kLargeRedzoneSize);
     memset(reinterpret_cast<void*>(end - kLargeRedzoneSize), 0, kLargeRedzoneSize);
-#ifdef RZ_DEBUG
+# ifdef RZ_DEBUG
     Log(kLog, __FILE__, __LINE__, "zeroed 2 large redzones around large "
         "allocation of", span->length, "pages");
-#endif
-#ifdef ZERO_SMALL_REDZONES
+# endif
   } else {
     // Small allocation: a small redzone at the start of each object slot
     const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
@@ -436,7 +440,7 @@ void ZeroRedzonesInSpan(Span *span) {
 # ifdef RZ_DEBUG
     Log(kLog, __FILE__, __LINE__, "zeroed", n, "redzones with sizeclass", objsize);
 # endif
-#endif // ZERO_SMALL_REDZONES
+#endif // !RZ_REUSE
   }
 }
 
