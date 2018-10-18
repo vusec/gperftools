@@ -372,7 +372,7 @@ void CentralFreeList::Populate() {
 # endif
 
   ptr += kRedzoneSize;
-#endif
+#endif // RZ_ALLOC
 
   int num = 0;
   while (ptr + size <= limit) {
@@ -411,8 +411,8 @@ size_t CentralFreeList::OverheadBytes() {
 
 void ZeroRedzonesInSpan(Span *span) {
 #ifdef RZ_REUSE
-  // No need to overwrite with zeroes, the pge fault handler will do that before
-  // initalizing the new redzones
+  // No need to overwrite with zeroes, the page fault handler will do that
+  // before initalizing the new redzones
   (void)span;
 #else
   // Overwrite redzones with zeroes to avoid false positives when the pages are
@@ -455,7 +455,7 @@ void DeleteAndUnmapSpan(Span *span) {
     Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
 #else
   Static::pageheap()->Delete(span);
-#endif
+#endif // !RZ_REUSE
 }
 
 }  // namespace tcmalloc
