@@ -440,8 +440,8 @@ void ZeroRedzonesInSpan(Span *span) {
 # ifdef RZ_DEBUG
     Log(kLog, __FILE__, __LINE__, "zeroed", n, "redzones with sizeclass", objsize);
 # endif
-#endif // !RZ_REUSE
   }
+#endif // !RZ_REUSE
 }
 
 void DeleteAndUnmapSpan(Span *span) {
