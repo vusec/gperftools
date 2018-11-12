@@ -23,7 +23,7 @@
 #include "static_vars.h"        // for Static
 #include "thread_cache.h"       // for ThreadCache
 #include "uffd-alloc.h"         // for tcmalloc_uffd::SystemAlloc
-#include "redzone-check.h"      // for tcmalloc_is_redzone, etc
+#include "heap-redzone-check.h" // for tcmalloc_get_heap_span, tcmalloc_is_heap_redzone
 //#include "noinstrument.h"       // for NOINSTRUMENT FIXME
 #define NOINSTRUMENT(name) __noinstrument_##name
 
@@ -300,27 +300,20 @@ bool SystemRelease(void *start, size_t length) {
 } // end namespace tcmalloc_uffd
 #endif // RZ_REUSE
 
-#ifndef DISABLE_SLOWPATH
-static bool points_to_redzone(void *ptr) {
+static inline const tcmalloc::Span *get_span(void *ptr) {
+  const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+  const PageID p = addr >> kPageShift;
+  return tcmalloc::Static::pageheap()->GetDescriptor(p);
+}
+
+static inline bool points_to_redzone(void *ptr, const tcmalloc::Span *span) {
 #ifdef RZ_DEBUG_VERBOSE
   ldbg("check redzone at", ptr);
 #endif
 
-  // Find span.
-  const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-  const PageID p = addr >> kPageShift;
-  const tcmalloc::Span *span = tcmalloc::Static::pageheap()->GetDescriptor(p);
-
-  // Ignore non-heap pointers.
-  if (PREDICT_FALSE(!span)) {
-#ifdef RZ_DEBUG_VERBOSE
-    ldbg("not a heap pointer: cannot find span for", ptr, "on page", p);
-#endif
-    return false;
-  }
-
+  ASSERT(span);
   const uintptr_t span_start = span->start << kPageShift;
-  const size_t span_offset = addr - span_start;
+  const size_t span_offset = reinterpret_cast<uintptr_t>(ptr) - span_start;
 
   // Large objects have the redzone at the end of the last page.
   if (PREDICT_FALSE(span->sizeclass == 0)) {
@@ -333,7 +326,6 @@ static bool points_to_redzone(void *ptr) {
   const size_t object_offset = span_offset % objsize;
   return object_offset < kRedzoneSize;
 }
-#endif // !DISABLE_SLOWPATH
 
 extern "C" {
   // Expose emergency malloc to sizedstack runtime library.
@@ -348,18 +340,13 @@ extern "C" {
     }
   }
 
-  // Slow path check for heap.
-  bool tcmalloc_is_redzone(void *ptr) {
-#ifdef DISABLE_SLOWPATH
-    return false;
-#else
-    return points_to_redzone(ptr);
-#endif
+  const void *tcmalloc_get_heap_span(void *ptr) {
+    return reinterpret_cast<const void*>(get_span(ptr));
   }
 
-  bool tcmalloc_is_redzone_multi(void *ptr, uint64_t naccess) {
-    llog(kCrash, "multibyte checks not yet supported");
-    return false;
+  // Slow path check for heap.
+  bool tcmalloc_is_heap_redzone(void *ptr, const void *span) {
+    return points_to_redzone(ptr, reinterpret_cast<const tcmalloc::Span*>(span));
   }
 }
 
