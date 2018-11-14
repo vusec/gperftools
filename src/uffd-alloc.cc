@@ -180,19 +180,19 @@ static void *uffd_poller_thread(void*) {
       };
       if (PREDICT_FALSE(ioctl(uffd, UFFDIO_COPY, &copy) < 0))
         lperror("could not copy pre-filled uffd page");
-      ASSERT(copy.copy == (long)kPageSize);
+      ASSERT(copy.copy == (long)sysPageSize);
     } else {
       // Zero the target page if no redzone page can be constructed.
       struct uffdio_zeropage zero = {
-        .range = { .start = pfpage, .len = kPageSize },
+        .range = { .start = pfpage, .len = sysPageSize },
         .mode = 0
       };
       if (PREDICT_FALSE(ioctl(uffd, UFFDIO_ZEROPAGE, &zero)))
         lperror("could not zero uffd page");
-      ASSERT(zero.zeropage == (long)kPageSize);
+      ASSERT(zero.zeropage == (long)sysPageSize);
     }
 
-    ldbg("uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + kPageSize));
+    ldbg("uffd: initialized", (void*)pfpage, "-", (void*)(pfpage + sysPageSize));
   }
 
   return NULL;
