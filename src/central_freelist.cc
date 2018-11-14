@@ -445,7 +445,7 @@ void ZeroRedzonesInSpan(Span *span) {
 }
 
 void DeleteAndUnmapSpan(Span *span) {
-#ifdef RZ_REUSE
+#if defined(RZ_REUSE) && defined(RZ_FILL)
   // Have the kernel remove page mappings for pages in this span to assert that
   // page faults happen to reinitialize redzones.
   void *start = reinterpret_cast<void*>(span->start << kPageShift);
@@ -455,7 +455,7 @@ void DeleteAndUnmapSpan(Span *span) {
     Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
 #else
   Static::pageheap()->Delete(span);
-#endif // !RZ_REUSE
+#endif // !RZ_REUSE or !RZ_FILL
 }
 
 }  // namespace tcmalloc
