@@ -240,7 +240,7 @@ void SizeMap::Init() {
   // align = (1 << shift), malloc(i * align) % align == 0,
   //
   // for all align values up to kPageSize.
-#ifdef RZ_ALLOC
+#if defined(RZ_ALLOC) && RZ_SIZE > 0
   // Reserving space for a redzone in the loop above breaks the alignment check
   // here.
 # ifdef RZ_DEBUG
