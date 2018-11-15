@@ -410,11 +410,7 @@ size_t CentralFreeList::OverheadBytes() {
 }
 
 void ZeroRedzonesInSpan(Span *span) {
-#ifdef RZ_REUSE
-  // No need to overwrite with zeroes, the page fault handler will do that
-  // before initalizing the new redzones
-  (void)span;
-#else
+#if defined(RZ_FILL) && !defined(RZ_REUSE)
   // Overwrite redzones with zeroes to avoid false positives when the pages are
   // reused for spans with another size class
   const uintptr_t start = span->start << kPageShift;
@@ -441,7 +437,11 @@ void ZeroRedzonesInSpan(Span *span) {
     Log(kLog, __FILE__, __LINE__, "zeroed", n, "redzones with sizeclass", objsize);
 # endif
   }
-#endif // !RZ_REUSE
+#else
+  // No need to overwrite with zeroes for RZ_REUSE, the page fault handler will
+  // do that before initalizing the new redzones
+  (void)span;
+#endif
 }
 
 void DeleteAndUnmapSpan(Span *span) {
