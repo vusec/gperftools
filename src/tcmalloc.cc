@@ -166,7 +166,9 @@ using tcmalloc::Span;
 using tcmalloc::StackTrace;
 using tcmalloc::Static;
 using tcmalloc::ThreadCache;
+#ifdef RZ_REUSE
 using tcmalloc::LargeFreeList;
+#endif
 
 DECLARE_double(tcmalloc_release_rate);
 
@@ -1395,7 +1397,7 @@ static void* do_malloc_pages(ThreadCache* heap, size_t size) {
 #endif
     if (span == NULL) {
       SpinLockHolder h(Static::pageheap_lock());
-      Span* span = Static::pageheap()->New(num_pages);
+      span = Static::pageheap()->New(num_pages);
     }
     result = (PREDICT_FALSE(span == NULL) ? NULL : SpanToMallocResult(span));
     report_large = should_report_large(num_pages);
