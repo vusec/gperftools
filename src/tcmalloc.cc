@@ -136,7 +136,7 @@
 #include "system-alloc.h"      // for DumpSystemAllocatorStats, etc
 #include "tcmalloc_guard.h"    // for TCMallocGuard
 #include "thread_cache.h"      // for ThreadCache
-#include "large-freelist.h"    // for LargeFreeList
+#include "large-freelist.h"    // for LargeFreeList, LFL_LOG
 
 #include "maybe_emergency_malloc.h"
 
@@ -1407,6 +1407,10 @@ static void* do_malloc_pages(ThreadCache* heap, size_t size) {
     ReportLargeAlloc(num_pages, result);
   }
 
+  LFL_LOG("big alloc %p %zu",
+          reinterpret_cast<char*>(result) - kLargeRedzoneSize,
+          num_pages << kPageShift);
+
   return result;
 }
 
@@ -1492,6 +1496,10 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
   }
 
   ASSERT((uintptr_t)ptr - kLargeRedzoneSize == span->start << kPageShift);
+
+  LFL_LOG("big free  %p %zu",
+          reinterpret_cast<void*>(span->start << kPageShift),
+          span->length << kPageShift);
 
   // Try to avoid calling madvise by keeping the span in a special freelist for
   // large objects.

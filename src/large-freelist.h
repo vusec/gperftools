@@ -5,8 +5,15 @@
 #define TCMALLOC_LARGE_FREELIST_H_
 #ifdef RZ_REUSE
 
+#include <cstdio>   // for fprintf, stderr
 #include "common.h" // for kLargeFreelistSize, Length
 #include "span.h"   // for Span
+
+#ifdef RZ_DEBUG
+# define LFL_LOG(fmt, ...) fprintf(stderr, "LFL: " fmt "\n", __VA_ARGS__)
+#else
+# define LFL_LOG(...) do {} while (false);
+#endif
 
 namespace tcmalloc {
 

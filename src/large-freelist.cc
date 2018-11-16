@@ -45,12 +45,16 @@ bool LargeFreeList::AddSpanToFreelist(Span *span) {
 
   // If a free slot was found, insert there.
   if (small == NULL) {
+    LFL_LOG("insert %p(%zu,%zu) at empty spot %zu",
+            span, span->start, span->length, ismall);
     _spans[ismall] = span;
     return true;
   }
 
   // If the buffer is full, replace the smallest span in the buffer or fail.
   if (span->length > small->length) {
+    LFL_LOG("replace %p(%zu,%zu) with %p(%zu,%zu) at empty spot %zu",
+            small, small->start, small->length, span, span->start, span->length, ismall);
     SetRedzoneAtStart(small, 0);
     SetRedzoneAtEnd(small, 0);
     DeleteAndUnmapSpan(small);
@@ -58,6 +62,7 @@ bool LargeFreeList::AddSpanToFreelist(Span *span) {
     return true;
   }
 
+  LFL_LOG("no room for %p(%zu,%zu)", span, span->start, span->length);
   return false;
 }
 
@@ -79,8 +84,10 @@ Span *LargeFreeList::FindOrSplitSpan(Length n) {
   }
 
   // No fit: do nothing
-  if (best == NULL)
+  if (best == NULL) {
+    LFL_LOG("no candidate for size %zu", n);
     return NULL;
+  }
 
   // Perfect fit: remove from buffer
   Span *leftover = NULL;
@@ -88,6 +95,8 @@ Span *LargeFreeList::FindOrSplitSpan(Length n) {
   // Imperfect fit: split and put leftover in buffer
   if (best->length > n)
     leftover = SplitSpan(best, n);
+  else
+    LFL_LOG("completely reuse %p(%zu,%zu)", best, best->start, best->length);
 
   _spans[ibest] = leftover;
   return best;
@@ -95,6 +104,7 @@ Span *LargeFreeList::FindOrSplitSpan(Length n) {
 
 // REQUIRES: the pageheap lock to be held
 Span *LargeFreeList::SplitSpan(Span *span, Length n) {
+  LFL_LOG("reuse %zu pages from %p(%zu,%zu)", n, span, span->start, span->length);
   Span *leftover = Static::pageheap()->Split(span, n);
 
   // If the leftover span fits in a small allocation, it will not be reused for
@@ -106,6 +116,7 @@ Span *LargeFreeList::SplitSpan(Span *span, Length n) {
   size_t object_size = (leftover->length << kPageShift) - 2 * kRedzoneSize;
 
   if (object_size <= max_small_object_size) {
+    LFL_LOG("release small leftover %zu", n);
     SetRedzoneAtEnd(leftover, 0);
     DeleteAndUnmapSpan(leftover);
     leftover = NULL;
