@@ -423,6 +423,7 @@ S_TCMALLOC_MINIMAL_INCLUDES = src/common.h \
                               src/internal_logging.h \
                               src/system-alloc.h \
                               src/uffd-alloc.h \
+                              src/heap-redzone-check.h \
                               src/packed-cache-inl.h \
                               $(SPINLOCK_INCLUDES) \
                               src/tcmalloc_guard.h \
@@ -462,6 +463,7 @@ noinst_LTLIBRARIES += libtcmalloc_minimal_internal.la
 libtcmalloc_minimal_internal_la_SOURCES = src/common.cc \
                                           src/internal_logging.cc \
                                           $(SYSTEM_ALLOC_CC) \
+                                          src/heap-redzone-check.cc \
                                           src/memfs_malloc.cc \
                                           src/central_freelist.cc \
                                           src/page_heap.cc \

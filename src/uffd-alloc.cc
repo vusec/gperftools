@@ -22,7 +22,7 @@
 #include "span.h"               // for Span
 #include "static_vars.h"        // for Static
 #include "thread_cache.h"       // for ThreadCache
-#include "uffd-alloc.h"         // for tcmalloc_uffd::SystemAlloc
+#include "uffd-alloc.h"         // for tcmalloc_uffd::{SystemAlloc,SystemRelease}
 #include "heap-redzone-check.h" // for tcmalloc_get_heap_span, tcmalloc_is_heap_redzone
 //#include "noinstrument.h"       // for NOINSTRUMENT FIXME
 #define NOINSTRUMENT(name) __noinstrument_##name
@@ -300,53 +300,15 @@ bool SystemRelease(void *start, size_t length) {
 } // end namespace tcmalloc_uffd
 #endif // RZ_REUSE
 
-static inline const tcmalloc::Span *get_span(void *ptr) {
-  const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-  const PageID p = addr >> kPageShift;
-  return tcmalloc::Static::pageheap()->GetDescriptor(p);
-}
-
-static inline bool points_to_redzone(void *ptr, const tcmalloc::Span *span) {
-#ifdef RZ_DEBUG_VERBOSE
-  ldbg("check redzone at", ptr);
-#endif
-
-  ASSERT(span);
-  const uintptr_t span_start = span->start << kPageShift;
-  const size_t span_offset = reinterpret_cast<uintptr_t>(ptr) - span_start;
-
-  // Large objects have the redzone at the end of the last page.
-  if (PREDICT_FALSE(span->sizeclass == 0)) {
-    const size_t span_size = span->length << kPageShift;
-    return span_offset < kLargeRedzoneSize || span_offset >= span_size - kLargeRedzoneSize;
-  }
-
-  // Small objects have a redzone at the start of each allocation unit.
-  const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
-  const size_t object_offset = span_offset % objsize;
-  return object_offset < kRedzoneSize;
-}
-
-extern "C" {
-  // Expose emergency malloc to sizedstack runtime library.
-  void tcmalloc_set_emergency_malloc(bool enable) {
-    ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
-    if (enable) {
-      ldbg("uffd: enabling emergency malloc");
-      cache.SetUseEmergencyMalloc();
-    } else {
-      ldbg("uffd: disabling emergency malloc");
-      cache.ResetUseEmergencyMalloc();
-    }
-  }
-
-  const void *tcmalloc_get_heap_span(void *ptr) {
-    return reinterpret_cast<const void*>(get_span(ptr));
-  }
-
-  // Slow path check for heap.
-  bool tcmalloc_is_heap_redzone(void *ptr, const void *span) {
-    return points_to_redzone(ptr, reinterpret_cast<const tcmalloc::Span*>(span));
+// Expose emergency malloc to sizedstack runtime library.
+extern "C" void tcmalloc_set_emergency_malloc(bool enable) {
+  ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
+  if (enable) {
+    ldbg("uffd: enabling emergency malloc");
+    cache.SetUseEmergencyMalloc();
+  } else {
+    ldbg("uffd: disabling emergency malloc");
+    cache.ResetUseEmergencyMalloc();
   }
 }
 
