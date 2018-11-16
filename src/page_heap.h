@@ -358,6 +358,8 @@ class PERFTOOLS_DLL_DECL PageHeap {
   bool aggressive_decommit_;
 };
 
+void DeleteAndUnmapSpan(Span *span);
+
 }  // namespace tcmalloc
 
 #ifdef _MSC_VER

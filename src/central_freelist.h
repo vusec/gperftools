@@ -206,10 +206,6 @@ class CentralFreeListPadded : public CentralFreeListPaddedTo<
   sizeof(CentralFreeList) % 64> {
 };
 
-void ZeroRedzonesInSpan(Span *span);
-
-void DeleteAndUnmapSpan(Span *span);
-
 }  // namespace tcmalloc
 
 #endif  // TCMALLOC_CENTRAL_FREELIST_H_

@@ -99,4 +99,39 @@ void DLL_Prepend(Span* list, Span* span) {
   list->next = span;
 }
 
+void ZeroRedzonesInSpan(Span *span) {
+#if defined(RZ_FILL) && !defined(RZ_REUSE)
+  // Overwrite redzones with zeroes to avoid false positives when the pages are
+  // reused for spans with another size class
+  const uintptr_t start = span->start << kPageShift;
+  const uintptr_t end = (span->start + span->length) << kPageShift;
+
+  if (span->sizeclass == 0) {
+    // Large allocation: large redzones at start and end
+    memset(reinterpret_cast<void*>(start), 0, kLargeRedzoneSize);
+    memset(reinterpret_cast<void*>(end - kLargeRedzoneSize), 0, kLargeRedzoneSize);
+# ifdef RZ_DEBUG
+    Log(kLog, __FILE__, __LINE__, "zeroed 2 large redzones around large "
+        "allocation of", span->length, "pages");
+# endif
+  } else {
+    // Small allocation: a small redzone at the start of each object slot
+    const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
+    const uintptr_t end = (span->start + span->length) << kPageShift;
+    unsigned n = 0;
+    for (uintptr_t p = start; p <= end - kRedzoneSize; p += objsize) {
+      memset(reinterpret_cast<void*>(p), 0, kRedzoneSize);
+      n++;
+    }
+# ifdef RZ_DEBUG
+    Log(kLog, __FILE__, __LINE__, "zeroed", n, "redzones with sizeclass", objsize);
+# endif
+  }
+#else
+  // No need to overwrite with zeroes for RZ_REUSE, the page fault handler will
+  // do that before initalizing the new redzones
+  (void)span;
+#endif
+}
+
 }  // namespace tcmalloc

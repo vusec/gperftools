@@ -5,7 +5,8 @@
 #include "internal_logging.h"   // for Log, kLog, kCrash, ASSERT
 #include "heap-redzone-check.h" // for tcmalloc_get_heap_span, tcmalloc_is_heap_redzone
 
-using namespace tcmalloc;
+using tcmalloc::Span;
+using tcmalloc::Static;
 
 static inline const Span *get_span(void *ptr) {
   const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);

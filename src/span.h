@@ -170,6 +170,8 @@ void DLL_Prepend(Span* list, Span* span);
 // Return the length of the linked list. O(n)
 int DLL_Length(const Span* list);
 
+void ZeroRedzonesInSpan(Span *span);
+
 }  // namespace tcmalloc
 
 #endif  // TCMALLOC_SPAN_H_

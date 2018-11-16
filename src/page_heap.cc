@@ -44,6 +44,9 @@
 #include "static_vars.h"       // for Static
 #include "system-alloc.h"      // for TCMalloc_SystemAlloc, etc
 #include "uffd-alloc.h"        // for tcmalloc_uffd::SystemAlloc
+#ifdef RZ_REUSE
+#include <sys/mman.h>          // for madvise
+#endif
 
 DEFINE_double(tcmalloc_release_rate,
               EnvToDouble("TCMALLOC_RELEASE_RATE", 1.0),
@@ -754,6 +757,20 @@ bool PageHeap::CheckSet(SpanSet* spanset, Length min_pages,int freelist) {
     CHECK_CONDITION(GetDescriptor(s->start+s->length-1) == s);
   }
   return true;
+}
+
+void DeleteAndUnmapSpan(Span *span) {
+#if defined(RZ_REUSE) && defined(RZ_FILL)
+  // Have the kernel remove page mappings for pages in this span to assert that
+  // page faults happen to reinitialize redzones.
+  void *start = reinterpret_cast<void*>(span->start << kPageShift);
+  size_t length = span->length << kPageShift;
+  Static::pageheap()->Delete(span);
+  if (madvise(start, length, MADV_DONTNEED) < 0)
+    Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
+#else
+  Static::pageheap()->Delete(span);
+#endif // !RZ_REUSE or !RZ_FILL
 }
 
 }  // namespace tcmalloc

@@ -293,7 +293,7 @@ LIBSPINLOCK = libspinlock.la libsysinfo.la liblogging.la
 
 TCMALLOC_CC = src/tcmalloc.cc
 libmaybe_threads_la_SOURCES += src/maybe_threads.cc
-SYSTEM_ALLOC_CC = src/system-alloc.cc src/uffd-alloc.cc
+SYSTEM_ALLOC_CC = src/system-alloc.cc
 endif !MINGW
 
 # Add this whether or not we're under MinGW, to keep the tarball complete.
@@ -422,8 +422,6 @@ endif WITH_STACK_TRACE
 S_TCMALLOC_MINIMAL_INCLUDES = src/common.h \
                               src/internal_logging.h \
                               src/system-alloc.h \
-                              src/uffd-alloc.h \
-                              src/heap-redzone-check.h \
                               src/packed-cache-inl.h \
                               $(SPINLOCK_INCLUDES) \
                               src/tcmalloc_guard.h \
@@ -448,7 +446,9 @@ S_TCMALLOC_MINIMAL_INCLUDES = src/common.h \
                               src/base/thread_annotations.h \
                               src/malloc_hook-inl.h \
                               src/malloc_hook_mmap_linux.h \
-                              src/malloc_hook_mmap_freebsd.h
+                              src/malloc_hook_mmap_freebsd.h \
+                              src/uffd-alloc.h \
+                              src/heap-redzone-check.h
 SG_TCMALLOC_MINIMAL_INCLUDES = src/gperftools/malloc_hook.h \
                                src/gperftools/malloc_hook_c.h \
                                src/gperftools/malloc_extension.h \
@@ -463,7 +463,6 @@ noinst_LTLIBRARIES += libtcmalloc_minimal_internal.la
 libtcmalloc_minimal_internal_la_SOURCES = src/common.cc \
                                           src/internal_logging.cc \
                                           $(SYSTEM_ALLOC_CC) \
-                                          src/heap-redzone-check.cc \
                                           src/memfs_malloc.cc \
                                           src/central_freelist.cc \
                                           src/page_heap.cc \
@@ -475,6 +474,8 @@ libtcmalloc_minimal_internal_la_SOURCES = src/common.cc \
                                           src/thread_cache.cc \
                                           src/malloc_hook.cc \
                                           src/malloc_extension.cc \
+                                          src/uffd-alloc.cc \
+                                          src/heap-redzone-check.cc \
                                           $(TCMALLOC_MINIMAL_INCLUDES)
 # We #define NO_TCMALLOC_SAMPLES, since sampling is turned off for _minimal.
 libtcmalloc_minimal_internal_la_CXXFLAGS = -DNO_TCMALLOC_SAMPLES \
