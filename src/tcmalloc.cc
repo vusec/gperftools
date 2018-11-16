@@ -136,6 +136,7 @@
 #include "system-alloc.h"      // for DumpSystemAllocatorStats, etc
 #include "tcmalloc_guard.h"    // for TCMallocGuard
 #include "thread_cache.h"      // for ThreadCache
+#include "large-freelist.h"    // for LargeFreeList
 
 #include "maybe_emergency_malloc.h"
 
@@ -165,6 +166,7 @@ using tcmalloc::Span;
 using tcmalloc::StackTrace;
 using tcmalloc::Static;
 using tcmalloc::ThreadCache;
+using tcmalloc::LargeFreeList;
 
 DECLARE_double(tcmalloc_release_rate);
 
@@ -1385,8 +1387,16 @@ static void* do_malloc_pages(ThreadCache* heap, size_t size) {
     SpinLockHolder h(Static::pageheap_lock());
     report_large = should_report_large(num_pages);
   } else {
-    SpinLockHolder h(Static::pageheap_lock());
-    Span* span = Static::pageheap()->New(num_pages);
+    Span *span = NULL;
+#ifdef RZ_REUSE
+    // Large objects are kept in a special freelist for large objects for a
+    // while, try fetching a span from there.
+    span = LargeFreeList::FindOrSplitSpan(num_pages);
+#endif
+    if (span == NULL) {
+      SpinLockHolder h(Static::pageheap_lock());
+      Span* span = Static::pageheap()->New(num_pages);
+    }
     result = (PREDICT_FALSE(span == NULL) ? NULL : SpanToMallocResult(span));
     report_large = should_report_large(num_pages);
   }
@@ -1479,9 +1489,17 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
     span->objects = NULL;
   }
 
+  ASSERT((uintptr_t)ptr - kLargeRedzoneSize == span->start << kPageShift);
+
+  // Try to avoid calling madvise by keeping the span in a special freelist for
+  // large objects.
+#ifdef RZ_REUSE
+  if (LargeFreeList::AddSpanToFreelist(span))
+    return;
+#endif
+
   // Zero out redzones for large allocations to avoid false positives in
   // fast path redzone check.
-  ASSERT((uintptr_t)ptr - kLargeRedzoneSize == span->start << kPageShift);
   ZeroRedzonesInSpan(span);
   DeleteAndUnmapSpan(span);
 }
