@@ -73,15 +73,16 @@ static void *fill_heap_redzones(uintptr_t pfpage, const Span *span) {
   // the end of the last page.
   // XXX: surround large allocations with guard pages instead?
   if (span->sizeclass == 0) {
+    ASSERT(kLargeRedzoneSize <= sysPageSize);
     const uintptr_t span_start = span->start << kPageShift;
     const uintptr_t span_end = (span->start + span->length) << kPageShift;
     if (pfpage == span_start) {
       // lower bound redzone
-      memset(buf, kRedzoneValue, kRedzoneSize);
+      memset(buf, kRedzoneValue, kLargeRedzoneSize);
     }
     else if (pfpage == span_end - sysPageSize) {
       // upper bound redzone
-      memset(buf + sysPageSize - kRedzoneSize, kRedzoneValue, kRedzoneSize);
+      memset(buf + sysPageSize - kLargeRedzoneSize, kRedzoneValue, kLargeRedzoneSize);
     }
     return buf;
   }
