@@ -31,5 +31,9 @@ public:
 
 }  // namespace tcmalloc
 
-#endif // RZ_REUSE
+#else // RZ_REUSE
+
+# define LFL_LOG(...) do {} while (false)
+
+#endif // !RZ_REUSE
 #endif // TCMALLOC_LARGE_FREELIST_H_
