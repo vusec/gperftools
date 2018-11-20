@@ -284,8 +284,10 @@ void *SystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
 }
 
 bool SystemRelease(void *start, size_t length) {
-  // Unregister allocated pages that never saw a page fault.
-  // FIXME: should we do this before calling TCMalloc_SystemRelease?
+  // TCMalloc never unmaps ranges, it only calls madvise with MADV_FREE when a
+  // span is decommitted. The span may be committed again later to be reused,
+  // so we never want to unregister the range.
+#if 0
   struct uffdio_range range = {
     .start = reinterpret_cast<__u64>(start),
     .len = length
@@ -294,6 +296,7 @@ bool SystemRelease(void *start, size_t length) {
     lperror("uffd: could not unregister pages");
 
   ldbg("uffd: unregistered", start, "-", (char*)start + length);
+#endif
 
   return TCMalloc_SystemRelease(start, length);
 }
