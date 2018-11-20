@@ -144,14 +144,14 @@ static void *uffd_poller_thread(void*) {
     ASSERT(nready == 1);
     ASSERT(pollfd.revents & POLLIN);
 
-    // Read message; We only expect page faults.
+    // Read message; We only handle page faults.
     struct uffd_msg msg;
     int nread = read(uffd, &msg, sizeof (msg));
     if (PREDICT_FALSE(nread < 0))
       lperror("read on uffd");
     ASSERT(nread == sizeof (msg));
     if (PREDICT_FALSE(msg.event != UFFD_EVENT_PAGEFAULT))
-      llog(kCrash, "received non-pagefault uffd event");
+      continue;
 
     // Look up size class through span.
     const PageID p = msg.arg.pagefault.address >> kPageShift;
