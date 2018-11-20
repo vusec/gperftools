@@ -1,8 +1,6 @@
 // ---
 // Author: Taddeus Kroes <t.kroes@vu.nl>
 
-#ifdef RZ_ALLOC
-
 #ifndef _GNU_SOURCE
 # define _GNU_SOURCE
 #endif
@@ -302,7 +300,6 @@ bool SystemRelease(void *start, size_t length) {
 }
 
 } // end namespace tcmalloc_uffd
-#endif // RZ_REUSE
 
 // Expose emergency malloc to sizedstack runtime library.
 extern "C" void tcmalloc_set_emergency_malloc(bool enable) {
@@ -316,4 +313,4 @@ extern "C" void tcmalloc_set_emergency_malloc(bool enable) {
   }
 }
 
-#endif // RZ_ALLOC
+#endif // RZ_REUSE

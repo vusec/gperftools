@@ -760,7 +760,7 @@ bool PageHeap::CheckSet(SpanSet* spanset, Length min_pages,int freelist) {
 }
 
 void DeleteAndUnmapSpan(Span *span) {
-#if defined(RZ_REUSE) && defined(RZ_FILL)
+#if defined(RZ_REUSE) && defined(RZ_ALLOC)
   // Have the kernel remove page mappings for pages in this span to assert that
   // page faults happen to reinitialize redzones.
   void *start = reinterpret_cast<void*>(span->start << kPageShift);
@@ -770,7 +770,7 @@ void DeleteAndUnmapSpan(Span *span) {
     Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
 #else
   Static::pageheap()->Delete(span);
-#endif // !RZ_REUSE or !RZ_FILL
+#endif // !RZ_REUSE or !RZ_ALLOC
 }
 
 }  // namespace tcmalloc

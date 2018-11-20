@@ -184,9 +184,6 @@ static const size_t kLargeFreeListSize = 16;
 #elif defined(RZ_FILL)
 # error "cannot have RZ_FILL without RZ_ALLOC"
 
-#elif defined(RZ_REUSE)
-# error "cannot have RZ_REUSE without RZ_ALLOC"
-
 #else // RZ_ALLOC
 
 static const size_t kRedzoneSize = 0;
