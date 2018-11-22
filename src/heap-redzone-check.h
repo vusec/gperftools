@@ -19,6 +19,13 @@ const void *tcmalloc_get_heap_span(void *ptr);
  __attribute__((noinline))
 bool tcmalloc_is_heap_redzone(void *ptr, const void *span);
 
+void tcmalloc_set_emergency_malloc(bool enable);
+
+#if defined(RZ_REUSE) && defined(RZ_FILL)
+void *tcmalloc_fill_heap_redzones(uintptr_t pfpage,
+    unsigned long page_size, const void *span);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

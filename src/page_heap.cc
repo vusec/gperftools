@@ -43,7 +43,6 @@
 #include "page_heap_allocator.h"  // for PageHeapAllocator
 #include "static_vars.h"       // for Static
 #include "system-alloc.h"      // for TCMalloc_SystemAlloc, etc
-#include "uffd-alloc.h"        // for tcmalloc_uffd::SystemAlloc
 #ifdef RZ_REUSE
 #include <sys/mman.h>          // for madvise
 #endif
@@ -65,6 +64,42 @@ DEFINE_int64(tcmalloc_heap_limit_mb,
               "Zero means to allocate as long as system allows.");
 
 namespace tcmalloc {
+
+/*
+ * Wrappers for systemalloc that handle userfaultfd event registration.
+ */
+
+#ifdef RZ_REUSE
+// register_uffd_pages is defined in libredzones runtime which is linked
+// statically, so use a weak symbol to allow deferred symbol resolution.
+__attribute__((weak))
+extern "C" void register_uffd_pages(void *start, size_t len);
+#endif
+
+static void *RegisteredSystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
+  void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
+#ifdef RZ_REUSE
+  ASSERT(ptr != NULL);
+  register_uffd_pages(ptr, *actual_size);
+#endif
+  return ptr;
+}
+
+static bool RegisteredSystemRelease(void *start, size_t length) {
+#ifdef RZ_REUSE
+  // TCMalloc never unmaps ranges, it only calls madvise with MADV_FREE when a
+  // span is decommitted. The span may be committed again later to be reused,
+  // so we never want to unregister the range.
+#endif
+  return TCMalloc_SystemRelease(start, length);
+}
+
+static void RegisteredSystemCommit(void *start, size_t length) {
+#ifdef RZ_REUSE
+  // Committing takes no extra work since we never deregister spans.
+#endif
+  TCMalloc_SystemCommit(start, length);
+}
 
 PageHeap::PageHeap()
     : pagemap_(MetaDataAlloc),
@@ -243,8 +278,8 @@ Span* PageHeap::Split(Span* span, Length n) {
 void PageHeap::CommitSpan(Span* span) {
   ++stats_.commit_count;
 
-  TCMalloc_SystemCommit(reinterpret_cast<void*>(span->start << kPageShift),
-                        static_cast<size_t>(span->length << kPageShift));
+  RegisteredSystemCommit(reinterpret_cast<void*>(span->start << kPageShift),
+                         static_cast<size_t>(span->length << kPageShift));
   stats_.committed_bytes += span->length << kPageShift;
   stats_.total_commit_bytes += (span->length << kPageShift);
 }
@@ -252,13 +287,8 @@ void PageHeap::CommitSpan(Span* span) {
 bool PageHeap::DecommitSpan(Span* span) {
   ++stats_.decommit_count;
 
-#ifdef RZ_REUSE
-  bool rv = tcmalloc_uffd::SystemRelease(reinterpret_cast<void*>(span->start << kPageShift),
-                                         static_cast<size_t>(span->length << kPageShift));
-#else
-  bool rv = TCMalloc_SystemRelease(reinterpret_cast<void*>(span->start << kPageShift),
-                                   static_cast<size_t>(span->length << kPageShift));
-#endif
+  bool rv = RegisteredSystemRelease(reinterpret_cast<void*>(span->start << kPageShift),
+                                    static_cast<size_t>(span->length << kPageShift));
   if (rv) {
     stats_.committed_bytes -= span->length << kPageShift;
     stats_.total_decommit_bytes += (span->length << kPageShift);
@@ -656,22 +686,14 @@ bool PageHeap::GrowHeap(Length n) {
   size_t actual_size;
   void* ptr = NULL;
   if (EnsureLimit(ask)) {
-#ifdef RZ_REUSE
-      ptr = tcmalloc_uffd::SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
-#else
-      ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
-#endif
+      ptr = RegisteredSystemAlloc(ask << kPageShift, &actual_size, kPageSize);
   }
   if (ptr == NULL) {
     if (n < ask) {
       // Try growing just "n" pages
       ask = n;
       if (EnsureLimit(ask)) {
-#ifdef RZ_REUSE
-        ptr = tcmalloc_uffd::SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
-#else
-        ptr = TCMalloc_SystemAlloc(ask << kPageShift, &actual_size, kPageSize);
-#endif
+        ptr = RegisteredSystemAlloc(ask << kPageShift, &actual_size, kPageSize);
       }
     }
     if (ptr == NULL) return false;

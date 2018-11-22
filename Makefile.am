@@ -447,7 +447,6 @@ S_TCMALLOC_MINIMAL_INCLUDES = src/common.h \
                               src/malloc_hook-inl.h \
                               src/malloc_hook_mmap_linux.h \
                               src/malloc_hook_mmap_freebsd.h \
-                              src/uffd-alloc.h \
                               src/heap-redzone-check.h \
                               src/large-freelist.h
 SG_TCMALLOC_MINIMAL_INCLUDES = src/gperftools/malloc_hook.h \
@@ -475,7 +474,6 @@ libtcmalloc_minimal_internal_la_SOURCES = src/common.cc \
                                           src/thread_cache.cc \
                                           src/malloc_hook.cc \
                                           src/malloc_extension.cc \
-                                          src/uffd-alloc.cc \
                                           src/heap-redzone-check.cc \
                                           src/large-freelist.cc \
                                           $(TCMALLOC_MINIMAL_INCLUDES)
