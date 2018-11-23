@@ -158,8 +158,8 @@ static const int kAddressBits = 8 * sizeof(void*);
 # endif
 static const size_t kRedzoneSize = RZ_SIZE;
 
-// Enforce large alignment of large allocations by increasing the redzone size
-// to one page.
+// Enforce alignment of large allocations by increasing the redzone size to one
+// page.
 # if RZ_SIZE > 0
 static const size_t kLargeRedzoneSize = 4096;
 # else

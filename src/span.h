@@ -79,11 +79,21 @@ struct Span {
     // spans from those sets. span_iter_space is space for such
     // iterator which lifetime is controlled explicitly.
     char span_iter_space[sizeof(SpanSet::iterator)];
+
+#ifdef RZ_ALLOC
+    struct  __attribute__((__packed__)) {
+      uint32_t stack_objsize;  // Object size iff is_stack==1
+      uint16_t stack_guard;    // Stack guard size iff is_stack==1.
+    };
+#endif
   };
   unsigned int  refcount : 16;  // Number of non-free objects
   unsigned int  sizeclass : 8;  // Size-class for small objects (or 0)
   unsigned int  location : 2;   // Is the span on a freelist, and if so, which?
   unsigned int  sample : 1;     // Sampled object?
+#ifdef RZ_ALLOC
+  unsigned int  is_stack : 1;   // Iff span is for stack allocations.
+#endif
   bool          has_span_iter : 1; // Iff span_iter_space has valid
                                    // iterator. Only for debug builds.
 

@@ -3,21 +3,17 @@
 
 #ifdef RZ_ALLOC
 
-#include <sys/mman.h>           // for mmap, etc
+#include <sys/mman.h>           // for mmap, mprotect, etc
 #include <string.h>             // for strerror
 #include <errno.h>              // for errno
+#include <limits>               // for numeric_limits
 #include "config.h"
 #include "base/basictypes.h"    // for PREDICT_FALSE
 #include "internal_logging.h"   // for Log, kLog, kCrash, ASSERT
 #include "span.h"               // for Span
 #include "static_vars.h"        // for Static
 #include "thread_cache.h"       // for ThreadCache
-#include "heap-redzone-check.h" // for tcmalloc_get_heap_span, tcmalloc_is_heap_redzone
-
-#include "span.h"               // for Span
-#include "static_vars.h"        // for Static
-#include "internal_logging.h"   // for Log, kLog, kCrash, ASSERT
-#include "heap-redzone-check.h" // for tcmalloc_get_heap_span, tcmalloc_is_heap_redzone
+#include "heap-redzone-check.h" // for tcmalloc_get_span, tcmalloc_is_redzone
 
 // Uncomment to log slow path redzone checks on the heap.
 //#define RZ_DEBUG_VERBOSE
@@ -37,7 +33,7 @@ using tcmalloc::ThreadCache;
 # define ldbg(...)
 #endif
 
-static inline const Span *get_span(void *ptr) {
+static inline Span *get_span(void *ptr) {
   const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
   const PageID p = addr >> kPageShift;
   return Static::pageheap()->GetDescriptor(p);
@@ -59,6 +55,21 @@ static bool points_to_redzone(void *ptr, const Span *span) {
     return span_offset < kLargeRedzoneSize || span_offset >= span_size - kLargeRedzoneSize;
   }
 
+  if (span->is_stack) {
+    // Each sizeclass slot in the stack ends with a redzone. Arithmetically
+    // check if the pointer is in one of the redzones. The -1 is because we are
+    // checking from high to low but the memory access is from low to high,
+    // which means that 0 is OK but 1 to kRedzoneSize are redzone violations. We
+    // reduce this to a single comparison by making 0 wrap around to -1.
+    // Note: this computation does not work for guard pages, but we don't care
+    // about redzone checks there because accesses will segfault anyway.
+    const intptr_t span_end = (span->start + span->length) << kPageShift;
+    const intptr_t stack_end = span_end - span->stack_guard;
+    const ptrdiff_t stack_offset = stack_end - (intptr_t)ptr;
+    const size_t sc_offset = stack_offset % span->stack_objsize;
+    return sc_offset - 1 < kRedzoneSize;
+  }
+
   // Small objects have a redzone at the start of each allocation unit.
   const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
   const size_t object_offset = span_offset % objsize;
@@ -66,29 +77,102 @@ static bool points_to_redzone(void *ptr, const Span *span) {
 }
 
 extern "C" {
-  const void *tcmalloc_get_heap_span(void *ptr) {
+  const void *tcmalloc_get_span(void *ptr) {
     return reinterpret_cast<const void*>(get_span(ptr));
   }
 
   // Slow path check for heap.
-  bool tcmalloc_is_heap_redzone(void *ptr, const void *span) {
+  bool tcmalloc_is_redzone(void *ptr, const void *span) {
     return points_to_redzone(ptr, reinterpret_cast<const Span*>(span));
   }
 
   // Expose emergency malloc to runtime library.
   void tcmalloc_set_emergency_malloc(bool enable) {
-    ThreadCache &cache = *ThreadCache::GetCacheWhichMustBePresent();
     if (enable) {
       ldbg("uffd: enabling emergency malloc");
-      cache.SetUseEmergencyMalloc();
+      ThreadCache::SetUseEmergencyMalloc();
     } else {
       ldbg("uffd: disabling emergency malloc");
-      cache.ResetUseEmergencyMalloc();
+      ThreadCache::ResetUseEmergencyMalloc();
     }
   }
 }
 
-#if defined(RZ_REUSE) && defined(RZ_FILL)
+extern "C" void *tcmalloc_alloc_stack(size_t size, size_t guard, size_t sizeclass) {
+  ldbg("allocate stack of", size, "bytes with size class", sizeclass);
+  ASSERT(size > 0);
+  ASSERT(sizeclass > kRedzoneSize);
+
+  // Make sure the page heap is initialized.
+  if (PREDICT_FALSE(!Static::IsInited()))
+      ThreadCache::InitModule();
+
+  // Allocate stack span.
+  Span *span;
+  {
+    SpinLockHolder h(Static::pageheap_lock());
+    span = Static::pageheap()->New(tcmalloc::pages(size + 2 * guard));
+    ASSERT(span->location == Span::IN_USE);
+    span->is_stack = 1;
+
+    // Set nonzero sizeclass, we reserve zero for large heap allocations.
+    span->sizeclass = 1;
+
+    // Stack size classes may differ from the dynamically computed tcmalloc
+    // sizeclasses so we cannot use the sizeclass ID's used by from
+    // Static::sizemap. Instead we store the size class directly.
+    if (sizeclass > std::numeric_limits<uint32_t>::max())
+      llog(kCrash, "stack sizeclass too big for 32 bits:", sizeclass);
+    span->stack_objsize = static_cast<uint32_t>(sizeclass);
+
+    if (guard > std::numeric_limits<uint16_t>::max())
+      llog(kCrash, "stack guard too big for 16 bits:", guard);
+    span->stack_guard = static_cast<uint16_t>(guard);
+
+    ASSERT(span->stack_objsize == sizeclass);
+    ASSERT(span->stack_guard == guard);
+  }
+
+  // Protect guard zones. It is up to the caller to make sure that the guard
+  // zone size is a multiple of the system page size.
+  char *start = reinterpret_cast<char*>(span->start << kPageShift);
+  char *end = start + (span->length << kPageShift);
+  if (guard > 0) {
+    mprotect(start, guard, PROT_NONE);
+    mprotect(end - guard, guard, PROT_NONE);
+  }
+
+  // Return the end of the valid memory region because the stack grow down.
+  return end - guard;
+}
+
+extern "C" void tcmalloc_free_stack(void *stack) {
+  // Find stack span.
+  Span *span = get_span(stack);
+  ASSERT(span->is_stack);
+  ASSERT(span->sizeclass == 1);
+
+  ldbg("free stack at", (void*)((span->start << kPageShift) + span->stack_guard),
+       "with size class", span->stack_objsize);
+
+  // Unprotect guard zones to allow span reuse.
+  size_t guard = span->stack_guard;
+  if (guard > 0) {
+    char *start = reinterpret_cast<char*>(span->start << kPageShift);
+    char *end = start + (span->length << kPageShift);
+    mprotect(start, guard, PROT_READ | PROT_WRITE);
+    mprotect(end - guard, guard, PROT_READ | PROT_WRITE);
+  }
+
+  // Return span to page heap.
+  {
+    SpinLockHolder h(Static::pageheap_lock());
+    DeleteAndUnmapSpan(span);
+  }
+}
+
+#ifdef RZ_REUSE
+#ifdef RZ_FILL
 
 static char *mmapx(size_t size) {
   char *page = (char*)mmap(NULL, size, PROT_READ | PROT_WRITE,
@@ -98,70 +182,97 @@ static char *mmapx(size_t size) {
   return page;
 }
 
-static void *fill_heap_redzones(uintptr_t pfpage, unsigned long sysPageSize, const Span *span) {
+// FIXME: make it this:
+//static void *fill_redzones(void *start, size_t len, const Span *span) {
+static void *fill_redzones(uintptr_t pfpage, unsigned long sysPageSize, const Span *span) {
   ASSERT(span->location == Span::IN_USE);
-  ldbg("uffd:   span at", (void*)(span->start << kPageShift), "with length", span->length);
-
-  // TODO: create pool of pages per size class with pre-filled redzones
   ASSERT(sysPageSize > 0);
+
+  ldbg("uffd:   span at", (void*)(span->start << kPageShift),
+       "with length", span->length);
+
   static char *buf = mmapx(sysPageSize);
   memset(buf, 0, sysPageSize);
 
-  // For large allocations, put the redzones at the start of the first page and
-  // the end of the last page.
-  // XXX: surround large allocations with guard pages instead?
   if (span->sizeclass == 0) {
+    // For large allocations, put the redzones at the start of the first page
+    // and the end of the last page.
+    // XXX: surround large allocations with guard pages instead?
     ASSERT(kLargeRedzoneSize <= sysPageSize);
     const uintptr_t span_start = span->start << kPageShift;
     const uintptr_t span_end = (span->start + span->length) << kPageShift;
     if (pfpage == span_start) {
       // lower bound redzone
+      ldbg("uffd: initialize large redzone at start of large allocation at", (void*)pfpage);
       memset(buf, kRedzoneValue, kLargeRedzoneSize);
     }
     else if (pfpage == span_end - sysPageSize) {
       // upper bound redzone
+      ldbg("uffd: initialize large redzone at end of large allocation at", (void*)pfpage);
       memset(buf + sysPageSize - kLargeRedzoneSize, kRedzoneValue, kLargeRedzoneSize);
     }
-    return buf;
-  }
+  } else {
+    // For small allocations, fill all redzones of objects that are either fully
+    // or partially in this page. Each slot starts with a redzone.
+    size_t objsize;
+    ssize_t lead_obj;
 
-  // For small/medium allocations, fill all redzones of objects that are either
-  // fully or partially in this page. Each slot starts with a redzone.
-  const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
-  const uintptr_t span_start = span->start << kPageShift;
-  const ptrdiff_t span_offset = pfpage - span_start;
-  const size_t obj_before_pfpage = span_offset % objsize;
-  const ssize_t lead_rz = kRedzoneSize - obj_before_pfpage;
-  const char *buf_end = buf + sysPageSize;
+    ldbg("uffd: initialize redzones for page at", (void*)pfpage);
 
-  ldbg("uffd: initialize redzones for page at", (void*)pfpage, "with object size", objsize);
+    if (span->is_stack) {
+      ASSERT(span->sizeclass == 1);
+      objsize = static_cast<size_t>(span->stack_objsize);
+      const uintptr_t span_end = (span->start + span->length) << kPageShift;
+      const uintptr_t stack_start = span_end - span->stack_guard - kRedzoneSize;
+      const ptrdiff_t stack_offset = stack_start - pfpage;
+      lead_obj = stack_offset % objsize;
+      ldbg("uffd:   stack page with object size", objsize, "lead", lead_obj);
+    } else {
+      objsize = Static::sizemap()->class_to_size(span->sizeclass);
+      const uintptr_t span_start = span->start << kPageShift;
+      const ptrdiff_t span_offset = pfpage - span_start;
+      const size_t obj_before_pfpage = span_offset % objsize;
+      lead_obj = objsize - obj_before_pfpage;
+      ldbg("uffd:   heap page with object size", objsize, "lead", lead_obj);
+    }
 
-  if (lead_rz > 0) {
-    ldbg("uffd:   fill", lead_rz, "redzone bytes at offset 0");
-    memset(buf, kRedzoneValue, lead_rz);
-  }
+    const ssize_t lead_rz = lead_obj - (objsize - kRedzoneSize);
+    const char *end = buf + sysPageSize;
+    char *next_rz = buf + lead_obj;
 
-  char *next_rz = buf - obj_before_pfpage + objsize;
-  while (next_rz <= buf_end - kRedzoneSize) {
-    ldbg("uffd:   fill", kRedzoneSize, "redzone bytes at offset", next_rz - buf);
-    memset(next_rz, kRedzoneValue, kRedzoneSize);
-    next_rz += objsize;
-  }
+    if (lead_rz > 0) {
+#ifdef RZ_DEBUG_VERBOSE
+      ldbg("uffd:   fill", lead_rz, "redzone bytes at offset 0");
+#endif
+      memset(buf, kRedzoneValue, lead_rz);
+    }
 
-  const ptrdiff_t tail_rz = buf_end - next_rz;
-  if (tail_rz > 0) {
-    ldbg("uffd:   fill", tail_rz, "redzone bytes at offset", next_rz - buf);
-    memset(next_rz, kRedzoneValue, tail_rz);
+    while (next_rz <= end - kRedzoneSize) {
+#ifdef RZ_DEBUG_VERBOSE
+      ldbg("uffd:   fill", kRedzoneSize, "redzone bytes at offset", next_rz - buf);
+#endif
+      memset(next_rz, kRedzoneValue, kRedzoneSize);
+      next_rz += objsize;
+    }
+
+    const ptrdiff_t tail_rz = end - next_rz;
+    if (tail_rz > 0) {
+#ifdef RZ_DEBUG_VERBOSE
+      ldbg("uffd:   fill", tail_rz, "redzone bytes at offset", next_rz - buf);
+#endif
+      memset(next_rz, kRedzoneValue, tail_rz);
+    }
   }
 
   return buf;
 }
 
-extern "C" void *tcmalloc_fill_heap_redzones(uintptr_t pfpage,
+extern "C" void *tcmalloc_fill_redzones(uintptr_t pfpage,
     unsigned long page_size, const void *span) {
-  return fill_heap_redzones(pfpage, page_size, reinterpret_cast<const Span*>(span));
+  return fill_redzones(pfpage, page_size, reinterpret_cast<const Span*>(span));
 }
 
-#endif // RZ_REUSE and RZ_FILL
+#endif // RZ_FILL
+#endif // RZ_REUSE
 
 #endif // RZ_ALLOC

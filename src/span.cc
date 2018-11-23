@@ -59,6 +59,9 @@ Span* NewSpan(PageID p, Length len) {
 #ifdef SPAN_HISTORY
   result->nexthistory = 0;
 #endif
+#ifdef RZ_ALLOC
+  result->is_stack = false;
+#endif
   return result;
 }
 

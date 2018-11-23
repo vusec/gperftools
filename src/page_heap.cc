@@ -44,7 +44,8 @@
 #include "static_vars.h"       // for Static
 #include "system-alloc.h"      // for TCMalloc_SystemAlloc, etc
 #ifdef RZ_REUSE
-#include <sys/mman.h>          // for madvise
+#include <sys/mman.h>             // for madvise
+#include "libredzones-helpers.h"  // for register_uffd_pages
 #endif
 
 DEFINE_double(tcmalloc_release_rate,
@@ -68,13 +69,6 @@ namespace tcmalloc {
 /*
  * Wrappers for systemalloc that handle userfaultfd event registration.
  */
-
-#ifdef RZ_REUSE
-// register_uffd_pages is defined in libredzones runtime which is linked
-// statically, so use a weak symbol to allow deferred symbol resolution.
-__attribute__((weak))
-extern "C" void register_uffd_pages(void *start, size_t len);
-#endif
 
 static void *RegisteredSystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
   void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
@@ -260,6 +254,9 @@ Span* PageHeap::Split(Span* span, Length n) {
   ASSERT(n < span->length);
   ASSERT(span->location == Span::IN_USE);
   ASSERT(span->sizeclass == 0);
+#ifdef RZ_ALLOC
+  ASSERT(!span->is_stack);
+#endif
   Event(span, 'T', n);
 
   const int extra = span->length - n;
@@ -300,6 +297,9 @@ bool PageHeap::DecommitSpan(Span* span) {
 Span* PageHeap::Carve(Span* span, Length n) {
   ASSERT(n > 0);
   ASSERT(span->location != Span::IN_USE);
+#ifdef RZ_ALLOC
+  ASSERT(!span->is_stack);
+#endif
   const int old_location = span->location;
   RemoveFromFreeList(span);
   span->location = Span::IN_USE;
@@ -351,6 +351,13 @@ void PageHeap::Delete(Span* span) {
   const Length n = span->length;
   span->sizeclass = 0;
   span->sample = 0;
+#ifdef RZ_ALLOC
+  if (span->is_stack) {
+    span->is_stack = 0;
+    span->stack_objsize = 0;
+    span->stack_guard = 0;
+  }
+#endif
   span->location = Span::ON_NORMAL_FREELIST;
   Event(span, 'D', span->length);
   MergeIntoFreeList(span);  // Coalesces if possible

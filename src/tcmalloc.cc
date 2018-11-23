@@ -1554,8 +1554,14 @@ void do_free_with_callback(void* ptr,
       }
       cl = span->sizeclass;
       if (PREDICT_FALSE(cl == 0)) {
+#if defined(RZ_ALLOC) && RZ_SIZE > 0
+        ASSERT(reinterpret_cast<uintptr_t>(ptr) % kLargeRedzoneSize == 0);
+        ASSERT(span != NULL);
+#else
         ASSERT(reinterpret_cast<uintptr_t>(ptr) % kPageSize == 0);
         ASSERT(span != NULL && span->start == p);
+#endif
+
         do_free_pages(span, ptr);
         return;
       }
