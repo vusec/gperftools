@@ -3,14 +3,16 @@
 
 #ifdef RZ_REUSE_HEAP
 
-#include "page_heap.h"        // for DeleteAndUnmapSpan
-#include "static_vars.h"      // for Static
-#include "large-freelist.h"   // for LargeFreeList
+#include "common.h"         // for kRedzoneValue
+#include "page_heap.h"      // for DeleteAndUnmapSpan
+#include "static_vars.h"    // for Static
+#include "large-freelist.h" // for LargeFreeList
 
 namespace tcmalloc {
 
 Span *LargeFreeList::_spans[LargeFreeList::_size] = {NULL};
 
+#ifdef RZ_FILL
 static inline void SetRedzoneAtStart(Span *span, int val) {
   const uintptr_t start = span->start << kPageShift;
   memset(reinterpret_cast<void*>(start), val, kLargeRedzoneSize);
@@ -20,6 +22,11 @@ static inline void SetRedzoneAtEnd(Span *span, int val) {
   const uintptr_t end = (span->start + span->length) << kPageShift;
   memset(reinterpret_cast<void*>(end - kLargeRedzoneSize), val, kLargeRedzoneSize);
 }
+#else
+# define SetRedzoneAtStart(span, val)
+# define SetRedzoneAtEnd(span, val)
+# define kRedzoneValue 0
+#endif
 
 // REQUIRES: the pageheap lock to be held
 bool LargeFreeList::AddSpanToFreelist(Span *span) {
