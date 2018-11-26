@@ -173,12 +173,11 @@ static const size_t kLargeRedzoneSize = 0;
 static const unsigned char kRedzoneValue = RZ_VALUE;
 # endif
 
-# ifdef RZ_REUSE
+# ifdef RZ_REUSE_HEAP
+#  ifndef HAVE_MMAP
+#   error "need mmap/munmap/madvise for RZ_REUSE_HEAP"
+#  endif
 static const size_t kLargeFreeListSize = 16;
-# endif
-
-# if defined(RZ_REUSE) && !defined(HAVE_MMAP)
-#  error "need mmap/munmap/madvise for RZ_REUSE"
 # endif
 
 #elif defined(RZ_FILL)

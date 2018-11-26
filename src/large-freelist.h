@@ -3,7 +3,7 @@
 
 #ifndef TCMALLOC_LARGE_FREELIST_H_
 #define TCMALLOC_LARGE_FREELIST_H_
-#ifdef RZ_REUSE
+#ifdef RZ_REUSE_HEAP
 
 #include <cstdio>   // for fprintf, stderr
 #include "common.h" // for kLargeFreelistSize, Length
@@ -31,9 +31,9 @@ public:
 
 }  // namespace tcmalloc
 
-#else // RZ_REUSE
+#else // RZ_REUSE_HEAP
 
 # define LFL_LOG(...) do {} while (false)
 
-#endif // !RZ_REUSE
+#endif // !RZ_REUSE_HEAP
 #endif // TCMALLOC_LARGE_FREELIST_H_

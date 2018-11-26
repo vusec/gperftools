@@ -1,7 +1,7 @@
 // ---
 // Author: Taddeus Kroes <t.kroes@vu.nl>
 
-#ifdef RZ_REUSE
+#ifdef RZ_REUSE_HEAP
 
 #include "page_heap.h"        // for DeleteAndUnmapSpan
 #include "static_vars.h"      // for Static
@@ -130,4 +130,4 @@ Span *LargeFreeList::SplitSpan(Span *span, Length n) {
 
 }  // namespace tcmalloc
 
-#endif // RZ_REUSE
+#endif // RZ_REUSE_HEAP

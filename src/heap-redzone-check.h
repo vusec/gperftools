@@ -26,12 +26,10 @@ void *tcmalloc_alloc_stack(size_t size, size_t guard, size_t sizeclass);
 
 void tcmalloc_free_stack(void *stack);
 
-#ifdef RZ_REUSE
-# ifdef RZ_FILL
+#if defined(RZ_REUSE) && defined(RZ_FILL)
 void *tcmalloc_fill_redzones(uintptr_t pfpage,
     unsigned long page_size, const void *span);
-# endif // RZ_FILL
-#endif // RZ_REUSE
+#endif
 
 #ifdef __cplusplus
 }

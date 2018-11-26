@@ -103,7 +103,9 @@ void DLL_Prepend(Span* list, Span* span) {
 }
 
 void ZeroRedzonesInSpan(Span *span) {
-#if defined(RZ_FILL) && !defined(RZ_REUSE)
+#if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
+  ASSERT(!span->is_stack);
+
   // Overwrite redzones with zeroes to avoid false positives when the pages are
   // reused for spans with another size class
   const uintptr_t start = span->start << kPageShift;
@@ -131,8 +133,8 @@ void ZeroRedzonesInSpan(Span *span) {
 # endif
   }
 #else
-  // No need to overwrite with zeroes for RZ_REUSE, the page fault handler will
-  // do that before initalizing the new redzones
+  // No need to overwrite with zeroes for RZ_REUSE_HEAP, the page fault handler
+  // will do that before initalizing the new redzones
   (void)span;
 #endif
 }

@@ -43,10 +43,8 @@
 #include "page_heap_allocator.h"  // for PageHeapAllocator
 #include "static_vars.h"       // for Static
 #include "system-alloc.h"      // for TCMalloc_SystemAlloc, etc
-#ifdef RZ_REUSE
 #include <sys/mman.h>             // for madvise
 #include "libredzones-helpers.h"  // for register_uffd_pages
-#endif
 
 DEFINE_double(tcmalloc_release_rate,
               EnvToDouble("TCMALLOC_RELEASE_RATE", 1.0),
@@ -72,7 +70,7 @@ namespace tcmalloc {
 
 static void *RegisteredSystemAlloc(size_t size, size_t *actual_size, size_t alignment) {
   void *ptr = TCMalloc_SystemAlloc(size, actual_size, alignment);
-#ifdef RZ_REUSE
+#ifdef RZ_REUSE_HEAP
   ASSERT(ptr != NULL);
   register_uffd_pages(ptr, *actual_size);
 #endif
@@ -80,18 +78,14 @@ static void *RegisteredSystemAlloc(size_t size, size_t *actual_size, size_t alig
 }
 
 static bool RegisteredSystemRelease(void *start, size_t length) {
-#ifdef RZ_REUSE
   // TCMalloc never unmaps ranges, it only calls madvise with MADV_FREE when a
   // span is decommitted. The span may be committed again later to be reused,
   // so we never want to unregister the range.
-#endif
   return TCMalloc_SystemRelease(start, length);
 }
 
 static void RegisteredSystemCommit(void *start, size_t length) {
-#ifdef RZ_REUSE
   // Committing takes no extra work since we never deregister spans.
-#endif
   TCMalloc_SystemCommit(start, length);
 }
 
@@ -789,7 +783,7 @@ bool PageHeap::CheckSet(SpanSet* spanset, Length min_pages,int freelist) {
 }
 
 void DeleteAndUnmapSpan(Span *span) {
-#if defined(RZ_ALLOC) && defined(RZ_REUSE)
+#if defined(RZ_ALLOC) && defined(RZ_REUSE_HEAP)
   // Have the kernel remove page mappings for pages in this span to assert that
   // page faults happen to reinitialize redzones.
   void *start = reinterpret_cast<void*>(span->start << kPageShift);
@@ -799,7 +793,7 @@ void DeleteAndUnmapSpan(Span *span) {
     Log(kCrash, __FILE__, __LINE__, "madvise error:", strerror(errno));
 #else
   Static::pageheap()->Delete(span);
-#endif // !RZ_ALLOC or !RZ_REUSE
+#endif // !RZ_ALLOC or !RZ_REUSE_HEAP
 }
 
 }  // namespace tcmalloc

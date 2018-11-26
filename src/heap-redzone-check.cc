@@ -3,17 +3,18 @@
 
 #ifdef RZ_ALLOC
 
-#include <sys/mman.h>           // for mmap, mprotect, etc
-#include <string.h>             // for strerror
-#include <errno.h>              // for errno
-#include <limits>               // for numeric_limits
+#include <sys/mman.h>             // for mmap, mprotect, etc
+#include <string.h>               // for strerror
+#include <errno.h>                // for errno
+#include <limits>                 // for numeric_limits
 #include "config.h"
-#include "base/basictypes.h"    // for PREDICT_FALSE
-#include "internal_logging.h"   // for Log, kLog, kCrash, ASSERT
-#include "span.h"               // for Span
-#include "static_vars.h"        // for Static
-#include "thread_cache.h"       // for ThreadCache
-#include "heap-redzone-check.h" // for tcmalloc_get_span, tcmalloc_is_redzone
+#include "base/basictypes.h"      // for PREDICT_FALSE
+#include "internal_logging.h"     // for Log, kLog, kCrash, ASSERT
+#include "span.h"                 // for Span
+#include "static_vars.h"          // for Static
+#include "thread_cache.h"         // for ThreadCache
+#include "heap-redzone-check.h"   // for tcmalloc_get_span, tcmalloc_is_redzone
+#include "libredzones-helpers.h"  // for register_uffd_pages
 
 // Uncomment to log slow path redzone checks on the heap.
 //#define RZ_DEBUG_VERBOSE
@@ -98,6 +99,18 @@ extern "C" {
   }
 }
 
+#ifdef RZ_REUSE
+static inline void register_uffd_span(const Span *span) {
+  register_uffd_pages(reinterpret_cast<void*>(span->start << kPageShift),
+                      span->length << kPageShift);
+}
+
+static inline void unregister_uffd_span(const Span *span) {
+  unregister_uffd_pages(reinterpret_cast<void*>(span->start << kPageShift),
+                        span->length << kPageShift);
+}
+#endif // RZ_REUSE
+
 extern "C" void *tcmalloc_alloc_stack(size_t size, size_t guard, size_t sizeclass) {
   ldbg("allocate stack of", size, "bytes with size class", sizeclass);
   ASSERT(size > 0);
@@ -133,6 +146,16 @@ extern "C" void *tcmalloc_alloc_stack(size_t size, size_t guard, size_t sizeclas
     ASSERT(span->stack_guard == guard);
   }
 
+#if defined(RZ_REUSE_STACK) && !defined(RZ_REUSE_HEAP)
+  // If reuse is enabled for stack but not for heap, the pages are not
+  // registered automatically by the page heap so we register them here.
+  register_uffd_span(span);
+#elif !defined(RZ_REUSE_STACK) && defined(RZ_REUSE_HEAP)
+  // If reuse is enabled for heap but not for stack, the stack pages are
+  // registered automatically by the page heap so we unregister them here.
+  unregister_uffd_span(span);
+#endif
+
   // Protect guard zones. It is up to the caller to make sure that the guard
   // zone size is a multiple of the system page size.
   char *start = reinterpret_cast<char*>(span->start << kPageShift);
@@ -163,6 +186,13 @@ extern "C" void tcmalloc_free_stack(void *stack) {
     mprotect(start, guard, PROT_READ | PROT_WRITE);
     mprotect(end - guard, guard, PROT_READ | PROT_WRITE);
   }
+
+  // Reverse registration operations by tcmalloc_alloc_stack.
+#if defined(RZ_REUSE_STACK) && !defined(RZ_REUSE_HEAP)
+  unregister_uffd_span(span);
+#elif !defined(RZ_REUSE_STACK) && defined(RZ_REUSE_HEAP)
+  register_uffd_span(span);
+#endif
 
   // Return span to page heap.
   {

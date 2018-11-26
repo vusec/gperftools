@@ -359,7 +359,7 @@ void CentralFreeList::Populate() {
   ASSERT(kRedzoneSize % kAlignment == 0);
   ASSERT(limit - ptr >= kRedzoneSize + size);
 
-# if defined(RZ_FILL) && !defined(RZ_REUSE)
+# if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
 #  ifdef RZ_DEBUG
   Log(kLog, __FILE__, __LINE__, "fill redzone at start of span at", (void*)ptr);
 #  endif

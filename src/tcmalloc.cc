@@ -112,10 +112,6 @@
 #include <new>                          // for nothrow_t (ptr only), etc
 #include <vector>                       // for vector
 
-#ifdef RZ_REUSE
-#include <sys/mman.h>                   // for madvise
-#endif
-
 #include <gperftools/malloc_extension.h>
 #include <gperftools/malloc_hook.h>         // for MallocHook
 #include <gperftools/nallocx.h>
@@ -166,7 +162,7 @@ using tcmalloc::Span;
 using tcmalloc::StackTrace;
 using tcmalloc::Static;
 using tcmalloc::ThreadCache;
-#ifdef RZ_REUSE
+#ifdef RZ_REUSE_HEAP
 using tcmalloc::LargeFreeList;
 #endif
 
@@ -1164,7 +1160,7 @@ static inline size_t AddRedzone(size_t size, size_t rzsize = kRedzoneSize) {
 static inline void *AddAndFillLargeRedzoneAtStart(void *startptr) {
   char *ptr = static_cast<char*>(startptr);
 #ifdef RZ_ALLOC
-# if defined(RZ_FILL) && !defined(RZ_REUSE)
+# if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
 #  ifdef RZ_DEBUG
   Log(kLog, __FILE__, __LINE__, "fill redzone at", startptr);
 #  endif
@@ -1176,7 +1172,7 @@ static inline void *AddAndFillLargeRedzoneAtStart(void *startptr) {
 }
 
 static inline void FillRedzoneAtEnd(void *startptr, size_t allocsize, size_t rzsize = kRedzoneSize) {
-#if defined(RZ_FILL) && !defined(RZ_REUSE)
+#if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
   char *ptr = static_cast<char*>(startptr) + allocsize - rzsize;
 # ifdef RZ_DEBUG
   Log(kLog, __FILE__, __LINE__, "fill redzone at", (void*)ptr, " at the end of bytes:", allocsize);
@@ -1390,7 +1386,7 @@ static void* do_malloc_pages(ThreadCache* heap, size_t size) {
     report_large = should_report_large(num_pages);
   } else {
     Span *span = NULL;
-#ifdef RZ_REUSE
+#ifdef RZ_REUSE_HEAP
     // Large objects are kept in a special freelist for large objects for a
     // while, try fetching a span from there.
     span = LargeFreeList::FindOrSplitSpan(num_pages);
@@ -1503,7 +1499,7 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
 
   // Try to avoid calling madvise by keeping the span in a special freelist for
   // large objects.
-#ifdef RZ_REUSE
+#ifdef RZ_REUSE_HEAP
   if (LargeFreeList::AddSpanToFreelist(span))
     return;
 #endif
