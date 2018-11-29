@@ -11,14 +11,11 @@
 extern "C" {
 #endif
 
-// Helper to check if a pointer points to the heap, returns corresponding span.
- __attribute__((always_inline))
-const void *tcmalloc_get_span(void *ptr);
+enum redzone_result { unknown_address = 0, is_redzone, is_object };
 
-// Slow path for single-byte redzone checks, implemented in system-alloc.c. the
-// second argument must be non-NULL and returned by tcmalloc_get_span.
+// Slow path for single-byte redzone checks, implemented in system-alloc.c.
  __attribute__((noinline))
-bool tcmalloc_is_redzone(void *ptr, const void *span);
+enum redzone_result tcmalloc_is_redzone(void *ptr);
 
 void tcmalloc_set_emergency_malloc(bool enable);
 
@@ -27,8 +24,7 @@ void *tcmalloc_alloc_stack(size_t size, size_t guard, size_t sizeclass);
 void tcmalloc_free_stack(void *stack);
 
 #if defined(RZ_REUSE) && defined(RZ_FILL)
-void *tcmalloc_fill_redzones(uintptr_t pfpage,
-    unsigned long page_size, const void *span);
+void *tcmalloc_fill_redzones(void *start, size_t page_size);
 #endif
 
 #ifdef __cplusplus

@@ -13,7 +13,7 @@
 #include "span.h"                 // for Span
 #include "static_vars.h"          // for Static
 #include "thread_cache.h"         // for ThreadCache
-#include "heap-redzone-check.h"   // for tcmalloc_get_span, tcmalloc_is_redzone
+#include "heap-redzone-check.h"   // for tcmalloc_*
 #include "libredzones-helpers.h"  // for register_uffd_pages
 
 // Uncomment to log slow path redzone checks on the heap.
@@ -78,13 +78,12 @@ static bool points_to_redzone(void *ptr, const Span *span) {
 }
 
 extern "C" {
-  const void *tcmalloc_get_span(void *ptr) {
-    return reinterpret_cast<const void*>(get_span(ptr));
-  }
-
   // Slow path check for heap.
-  bool tcmalloc_is_redzone(void *ptr, const void *span) {
-    return points_to_redzone(ptr, reinterpret_cast<const Span*>(span));
+  enum redzone_result tcmalloc_is_redzone(void *ptr) {
+    const Span *span = get_span(ptr);
+    if (span == NULL)
+      return unknown_address;
+    return points_to_redzone(ptr, span) ? is_redzone : is_object;
   }
 
   // Expose emergency malloc to runtime library.
@@ -212,11 +211,16 @@ static char *mmapx(size_t size) {
   return page;
 }
 
-// FIXME: make it this:
-//static void *fill_redzones(void *start, size_t len, const Span *span) {
-static void *fill_redzones(uintptr_t pfpage, unsigned long sysPageSize, const Span *span) {
-  ASSERT(span->location == Span::IN_USE);
+extern "C" void *tcmalloc_fill_redzones(void *start, size_t sysPageSize) {
+  const Span *span = get_span(start);
+  if (span == NULL)
+    return NULL;
+
+  const uintptr_t istart = reinterpret_cast<uintptr_t>(start);
+
+  ASSERT((istart & (sysPageSize - 1)) == 0);
   ASSERT(sysPageSize > 0);
+  ASSERT(span->location == Span::IN_USE);
 
   ldbg("uffd:   span at", (void*)(span->start << kPageShift),
        "with length", span->length);
@@ -231,14 +235,14 @@ static void *fill_redzones(uintptr_t pfpage, unsigned long sysPageSize, const Sp
     ASSERT(kLargeRedzoneSize <= sysPageSize);
     const uintptr_t span_start = span->start << kPageShift;
     const uintptr_t span_end = (span->start + span->length) << kPageShift;
-    if (pfpage == span_start) {
+    if (istart == span_start) {
       // lower bound redzone
-      ldbg("uffd: initialize large redzone at start of large allocation at", (void*)pfpage);
+      ldbg("uffd: initialize large redzone at start of large allocation at", start);
       memset(buf, kRedzoneValue, kLargeRedzoneSize);
     }
-    else if (pfpage == span_end - sysPageSize) {
+    else if (istart == span_end - sysPageSize) {
       // upper bound redzone
-      ldbg("uffd: initialize large redzone at end of large allocation at", (void*)pfpage);
+      ldbg("uffd: initialize large redzone at end of large allocation at", start);
       memset(buf + sysPageSize - kLargeRedzoneSize, kRedzoneValue, kLargeRedzoneSize);
     }
   } else {
@@ -247,20 +251,20 @@ static void *fill_redzones(uintptr_t pfpage, unsigned long sysPageSize, const Sp
     size_t objsize;
     ssize_t lead_obj;
 
-    ldbg("uffd: initialize redzones for page at", (void*)pfpage);
+    ldbg("uffd: initialize redzones for page at", start);
 
     if (span->is_stack) {
       ASSERT(span->sizeclass == 1);
       objsize = static_cast<size_t>(span->stack_objsize);
       const uintptr_t span_end = (span->start + span->length) << kPageShift;
       const uintptr_t stack_start = span_end - span->stack_guard - kRedzoneSize;
-      const ptrdiff_t stack_offset = stack_start - pfpage;
+      const ptrdiff_t stack_offset = stack_start - istart;
       lead_obj = stack_offset % objsize;
       ldbg("uffd:   stack page with object size", objsize, "lead", lead_obj);
     } else {
       objsize = Static::sizemap()->class_to_size(span->sizeclass);
       const uintptr_t span_start = span->start << kPageShift;
-      const ptrdiff_t span_offset = pfpage - span_start;
+      const ptrdiff_t span_offset = istart - span_start;
       const size_t obj_before_pfpage = span_offset % objsize;
       lead_obj = objsize - obj_before_pfpage;
       ldbg("uffd:   heap page with object size", objsize, "lead", lead_obj);
@@ -295,11 +299,6 @@ static void *fill_redzones(uintptr_t pfpage, unsigned long sysPageSize, const Sp
   }
 
   return buf;
-}
-
-extern "C" void *tcmalloc_fill_redzones(uintptr_t pfpage,
-    unsigned long page_size, const void *span) {
-  return fill_redzones(pfpage, page_size, reinterpret_cast<const Span*>(span));
 }
 
 #endif // RZ_FILL
