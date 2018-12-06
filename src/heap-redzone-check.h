@@ -11,11 +11,11 @@
 extern "C" {
 #endif
 
-enum redzone_result { unknown_address = 0, is_redzone, is_object };
+enum redzone_result { redzone_unknown = 0, redzone_yes, redzone_no };
 
 // Slow path for single-byte redzone checks, implemented in system-alloc.c.
  __attribute__((noinline))
-enum redzone_result tcmalloc_is_redzone(void *ptr);
+enum redzone_result tcmalloc_is_redzone(void *ptr, size_t naccess);
 
 void tcmalloc_set_emergency_malloc(bool enable);
 

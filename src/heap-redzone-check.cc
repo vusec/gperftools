@@ -41,9 +41,9 @@ static inline Span *get_span(void *ptr) {
 }
 
 __attribute__((always_inline))
-static bool points_to_redzone(void *ptr, const Span *span) {
+static bool contains_redzone(void *ptr, const Span *span, size_t naccess) {
 #ifdef RZ_DEBUG_VERBOSE
-  ldbg("check redzone at", ptr);
+  ldbg("check", naccess, "bytes for redzones at", ptr);
 #endif
 
   ASSERT(span);
@@ -53,37 +53,33 @@ static bool points_to_redzone(void *ptr, const Span *span) {
   // Large objects have the redzone at the end of the last page.
   if (PREDICT_FALSE(span->sizeclass == 0)) {
     const size_t span_size = span->length << kPageShift;
-    return span_offset < kLargeRedzoneSize || span_offset >= span_size - kLargeRedzoneSize;
+    return span_offset < kLargeRedzoneSize || span_offset + naccess > span_size - kLargeRedzoneSize;
   }
 
   if (span->is_stack) {
-    // Each sizeclass slot in the stack ends with a redzone. Arithmetically
-    // check if the pointer is in one of the redzones. The -1 is because we are
-    // checking from high to low but the memory access is from low to high,
-    // which means that 0 is OK but 1 to kRedzoneSize are redzone violations. We
-    // reduce this to a single comparison by making 0 wrap around to -1.
     // Note: this computation does not work for guard pages, but we don't care
     // about redzone checks there because accesses will segfault anyway.
     const intptr_t span_end = (span->start + span->length) << kPageShift;
     const intptr_t stack_end = span_end - span->stack_guard;
     const ptrdiff_t stack_offset = stack_end - (intptr_t)ptr;
-    const size_t sc_offset = stack_offset % span->stack_objsize;
-    return sc_offset - 1 < kRedzoneSize;
+    const size_t objsize = span->stack_objsize;
+    const size_t object_offset = stack_offset % objsize;
+    return object_offset - naccess <= 0 || object_offset > objsize + kRedzoneSize;
   }
 
   // Small objects have a redzone at the start of each allocation unit.
   const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
   const size_t object_offset = span_offset % objsize;
-  return object_offset < kRedzoneSize;
+  return object_offset < kRedzoneSize || object_offset + naccess > objsize;
 }
 
 extern "C" {
   // Slow path check for heap.
-  enum redzone_result tcmalloc_is_redzone(void *ptr) {
+  enum redzone_result tcmalloc_is_redzone(void *ptr, size_t naccess) {
     const Span *span = get_span(ptr);
     if (span == NULL)
-      return unknown_address;
-    return points_to_redzone(ptr, span) ? is_redzone : is_object;
+      return redzone_unknown;
+    return contains_redzone(ptr, span, naccess) ? redzone_yes : redzone_no;
   }
 
   // Expose emergency malloc to runtime library.
