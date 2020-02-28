@@ -104,7 +104,7 @@ void DLL_Prepend(Span* list, Span* span) {
 }
 
 void ZeroRedzonesInSpan(Span *span) {
-#if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
+#if (defined(RZ_FILL) || defined(RZ_SHADOWMEM)) && !defined(RZ_REUSE_HEAP)
   ASSERT(!span->is_stack);
 
   // Overwrite redzones with zeroes to avoid false positives when the pages are
