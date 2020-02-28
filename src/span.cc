@@ -39,7 +39,7 @@
 #include "internal_logging.h"  // for ASSERT
 #include "page_heap_allocator.h"  // for PageHeapAllocator
 #include "static_vars.h"       // for Static
-#include "redzone-poisoning.h" // for MaybeUnpoisonRedzone
+#include "redzone-poisoning.h" // for UnpoisonRedzone
 
 namespace tcmalloc {
 
@@ -101,43 +101,6 @@ void DLL_Prepend(Span* list, Span* span) {
   span->prev = list;
   list->next->prev = span;
   list->next = span;
-}
-
-void ZeroRedzonesInSpan(Span *span) {
-#if (defined(RZ_FILL) || defined(RZ_SHADOWMEM)) && !defined(RZ_REUSE_HEAP)
-  ASSERT(!span->is_stack);
-
-  // Overwrite redzones with zeroes to avoid false positives when the pages are
-  // reused for spans with another size class
-  const uintptr_t start = span->start << kPageShift;
-  const uintptr_t end = (span->start + span->length) << kPageShift;
-
-  if (span->sizeclass == 0) {
-    // Large allocation: large redzones at start and end
-    MaybeUnpoisonRedzone(start, kLargeRedzoneSize);
-    MaybeUnpoisonRedzone(end - kLargeRedzoneSize, kLargeRedzoneSize);
-# ifdef RZ_DEBUG
-    Log(kLog, __FILE__, __LINE__, "zeroed 2 large redzones around large "
-        "allocation of", span->length, "pages");
-# endif
-  } else {
-    // Small allocation: a small redzone at the start of each object slot
-    const size_t objsize = Static::sizemap()->class_to_size(span->sizeclass);
-    const uintptr_t end = (span->start + span->length) << kPageShift;
-    unsigned n = 0;
-    for (uintptr_t p = start; p <= end - kRedzoneSize; p += objsize) {
-      MaybeUnpoisonRedzone(p);
-      n++;
-    }
-# ifdef RZ_DEBUG
-    Log(kLog, __FILE__, __LINE__, "zeroed", n, "redzones with sizeclass", objsize);
-# endif
-  }
-#else
-  // No need to overwrite with zeroes for RZ_REUSE_HEAP, the page fault handler
-  // will do that before initalizing the new redzones
-  (void)span;
-#endif
 }
 
 }  // namespace tcmalloc

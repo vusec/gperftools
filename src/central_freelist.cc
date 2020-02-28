@@ -39,7 +39,7 @@
 #include "linked_list.h"       // for SLL_Next, SLL_Push, etc
 #include "page_heap.h"         // for PageHeap
 #include "static_vars.h"       // for Static
-#include "redzone-poisoning.h" // for MaybePoisonRedzone
+#include "redzone-poisoning.h" // for PoisonRedzone, etc
 
 using std::min;
 using std::max;
@@ -139,7 +139,7 @@ void CentralFreeList::ReleaseToSpans(void* object) {
 
     // Release central list lock while operating on pageheap
     lock_.Unlock();
-    ZeroRedzonesInSpan(span);
+    UnpoisonRedzonesInSpan(span);
     {
       SpinLockHolder h(Static::pageheap_lock());
       DeleteAndUnmapSpan(span);
@@ -373,8 +373,7 @@ void CentralFreeList::Populate() {
 # if defined(RZ_DEBUG) && defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
   Log(kLog, __FILE__, __LINE__, "fill redzone at start of span at", (void*)ptr);
 # endif
-  MaybePoisonRedzone(ptr);
-
+  PoisonRedzone(ptr);
   ptr += kRedzoneSize;
 #endif // RZ_ALLOC
 

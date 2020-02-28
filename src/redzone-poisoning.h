@@ -4,21 +4,24 @@
 #ifndef TCMALLOC_REDZONE_POISONING_H_
 #define TCMALLOC_REDZONE_POISONING_H_
 
-#include "common.h"            // for kRedzone*
+#include "common.h"  // for kRedzoneSize
+#include "span.h"    // for Span
 
 namespace tcmalloc {
 
-void MaybePoisonRedzone(void *ptr, size_t size = kRedzoneSize);
+void PoisonRedzone(void *ptr, size_t size = kRedzoneSize);
 
-void MaybeUnpoisonRedzone(void *ptr, size_t size = kRedzoneSize);
+void UnpoisonRedzone(void *ptr, size_t size = kRedzoneSize);
 
-static inline void MaybePoisonRedzone(uintptr_t ptr, size_t size = kRedzoneSize) {
-  MaybePoisonRedzone(reinterpret_cast<void*>(ptr), size);
+static inline void PoisonRedzone(uintptr_t ptr, size_t size = kRedzoneSize) {
+  PoisonRedzone(reinterpret_cast<void*>(ptr), size);
 }
 
-static inline void MaybeUnpoisonRedzone(uintptr_t ptr, size_t size = kRedzoneSize) {
-  MaybeUnpoisonRedzone(reinterpret_cast<void*>(ptr), size);
+static inline void UnpoisonRedzone(uintptr_t ptr, size_t size = kRedzoneSize) {
+  UnpoisonRedzone(reinterpret_cast<void*>(ptr), size);
 }
+
+void UnpoisonRedzonesInSpan(Span *span);
 
 }  // namespace tcmalloc
 

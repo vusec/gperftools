@@ -133,7 +133,7 @@
 #include "tcmalloc_guard.h"    // for TCMallocGuard
 #include "thread_cache.h"      // for ThreadCache
 #include "large-freelist.h"    // for LargeFreeList, LFL_LOG
-#include "redzone-poisoning.h" // for MaybePoisonRedzone
+#include "redzone-poisoning.h" // for PoisonRedzone, etc
 
 #include "maybe_emergency_malloc.h"
 
@@ -166,7 +166,7 @@ using tcmalloc::ThreadCache;
 #ifdef RZ_REUSE_HEAP
 using tcmalloc::LargeFreeList;
 #endif
-using tcmalloc::MaybePoisonRedzone;
+using tcmalloc::PoisonRedzone;
 
 DECLARE_double(tcmalloc_release_rate);
 
@@ -1162,22 +1162,22 @@ static inline size_t AddRedzone(size_t size, size_t rzsize = kRedzoneSize) {
 static inline void *AddAndFillLargeRedzoneAtStart(void *startptr) {
   char *ptr = static_cast<char*>(startptr);
 #ifdef RZ_ALLOC
-# if defined(RZ_DEBUG) && defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
-  Log(kLog, __FILE__, __LINE__, "fill redzone at", startptr);
+# ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "poison large redzone at", startptr);
 # endif
-  MaybePoisonRedzone(ptr, kLargeRedzoneSize);
+  PoisonRedzone(ptr, kLargeRedzoneSize);
   ptr += kLargeRedzoneSize;
 #endif
   return ptr;
 }
 
-static inline void FillRedzoneAtEnd(void *startptr, size_t allocsize, size_t rzsize = kRedzoneSize) {
-  char *ptr = static_cast<char*>(startptr) + allocsize - rzsize;
-#if defined(RZ_DEBUG) && defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
-  Log(kLog, __FILE__, __LINE__, "fill redzone at", (void*)ptr,
-      " at the end of bytes:", allocsize);
+static inline void FillRedzoneAtEnd(void *object, size_t allocsize, size_t rzsize = kRedzoneSize) {
+  char *rz = static_cast<char*>(object) + allocsize - rzsize;
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "poison redzone at", (void*)rz,
+      "right of a slot of size", allocsize);
 #endif
-  MaybePoisonRedzone(ptr, rzsize);
+  PoisonRedzone(rz, rzsize);
 }
 
 //-------------------------------------------------------------------
@@ -1505,7 +1505,7 @@ static ATTRIBUTE_NOINLINE void do_free_pages(Span* span, void* ptr) {
 
   // Zero out redzones for large allocations to avoid false positives in
   // fast path redzone check.
-  ZeroRedzonesInSpan(span);
+  UnpoisonRedzonesInSpan(span);
   DeleteAndUnmapSpan(span);
 }
 
