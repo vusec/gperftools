@@ -783,6 +783,13 @@ bool PageHeap::CheckSet(SpanSet* spanset, Length min_pages,int freelist) {
 }
 
 void DeleteAndUnmapSpan(Span *span) {
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__,
+      "delete and unmap span [location length sizeclass]",
+      (void*)(span->start << kPageShift), span->length,
+      Static::sizemap()->ByteSizeForClass(span->sizeclass));
+#endif
+
 #if defined(RZ_ALLOC) && defined(RZ_REUSE_HEAP)
   // Have the kernel remove page mappings for pages in this span to assert that
   // page faults happen to reinitialize redzones.

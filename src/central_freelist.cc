@@ -346,6 +346,13 @@ void CentralFreeList::Populate() {
     Static::pageheap()->SetCachedSizeClass(span->start + i, size_class_);
   }
 
+#ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__,
+      "populate span [location length sizeclass]",
+      (void*)(span->start << kPageShift), span->length,
+      Static::sizemap()->ByteSizeForClass(size_class_));
+#endif
+
   // Split the block into pieces and add to the free-list
   // TODO: coloring of objects to avoid cache conflicts?
   void** tail = &span->objects;
@@ -353,8 +360,11 @@ void CentralFreeList::Populate() {
   char* limit = ptr + (npages << kPageShift);
   const size_t size = Static::sizemap()->ByteSizeForClass(size_class_);
 
-  // Allocate and initialize a redzone at the start of each span.
 #ifdef RZ_ALLOC
+  // Allocate and initialize the left redzone of the leftmost object in the
+  // span. This is the only time a left redzone is filled; the freelist is built
+  // left-to-right order so for subsequent allocations we only need to
+  // initialize the right redzone for the allocated object.
   ASSERT(npages > 0);
   ASSERT(size_class_ > 0);
   ASSERT(kRedzoneSize % kAlignment == 0);

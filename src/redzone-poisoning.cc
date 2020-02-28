@@ -3,11 +3,16 @@
 
 #include <cstring>             // for memset
 #include "common.h"            // for kRedzone*
+#include "internal_logging.h"  // for ASSERT
 #include "redzone-poisoning.h"
 
 #define SHADOW_BASE          (0x00007fff8000ULL)
 #define SHADOW_SCALE         (3)
+#define SHADOW_ALIGN_MASK    ((1ULL << SHADOW_SCALE) - 1)
 #define SHADOW_REDZONE_MAGIC (0x11)
+
+using tcmalloc::kLog;
+using tcmalloc::Log;
 
 typedef uint8_t shadow_t;
 
@@ -20,10 +25,18 @@ static inline void MaybeSetRedzone(void *ptr, bool poison, size_t size) {
 #ifndef RZ_REUSE_HEAP
 
 # ifdef RZ_FILL
+#  ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "-", poison ? "fill with" : "clear", "guard value");
+#  endif
   memset(ptr, poison ? kRedzoneValue : 0, size);
 # endif
 
 # ifdef RZ_SHADOWMEM
+#  ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "-", poison ? "poison" : "unpoison", "shadow memory");
+#  endif
+  ASSERT(((uintptr_t)ptr & SHADOW_ALIGN_MASK) == 0);
+  ASSERT((size & SHADOW_ALIGN_MASK) == 0);
   const int shadowval = poison ? SHADOW_REDZONE_MAGIC : 0;
   memset(ShadowPtr(ptr), shadowval, size >> SHADOW_SCALE);
 # endif
