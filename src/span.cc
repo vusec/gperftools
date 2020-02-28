@@ -39,6 +39,7 @@
 #include "internal_logging.h"  // for ASSERT
 #include "page_heap_allocator.h"  // for PageHeapAllocator
 #include "static_vars.h"       // for Static
+#include "redzone-poisoning.h" // for MaybeUnpoisonRedzone
 
 namespace tcmalloc {
 
@@ -113,8 +114,8 @@ void ZeroRedzonesInSpan(Span *span) {
 
   if (span->sizeclass == 0) {
     // Large allocation: large redzones at start and end
-    memset(reinterpret_cast<void*>(start), 0, kLargeRedzoneSize);
-    memset(reinterpret_cast<void*>(end - kLargeRedzoneSize), 0, kLargeRedzoneSize);
+    MaybeUnpoisonRedzone(start, kLargeRedzoneSize);
+    MaybeUnpoisonRedzone(end - kLargeRedzoneSize, kLargeRedzoneSize);
 # ifdef RZ_DEBUG
     Log(kLog, __FILE__, __LINE__, "zeroed 2 large redzones around large "
         "allocation of", span->length, "pages");
@@ -125,7 +126,7 @@ void ZeroRedzonesInSpan(Span *span) {
     const uintptr_t end = (span->start + span->length) << kPageShift;
     unsigned n = 0;
     for (uintptr_t p = start; p <= end - kRedzoneSize; p += objsize) {
-      memset(reinterpret_cast<void*>(p), 0, kRedzoneSize);
+      MaybeUnpoisonRedzone(p);
       n++;
     }
 # ifdef RZ_DEBUG
