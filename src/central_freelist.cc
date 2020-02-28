@@ -39,6 +39,7 @@
 #include "linked_list.h"       // for SLL_Next, SLL_Push, etc
 #include "page_heap.h"         // for PageHeap
 #include "static_vars.h"       // for Static
+#include "redzone-poisoning.h" // for MaybePoisonRedzone
 
 using std::min;
 using std::max;
@@ -359,13 +360,10 @@ void CentralFreeList::Populate() {
   ASSERT(kRedzoneSize % kAlignment == 0);
   ASSERT(limit - ptr >= kRedzoneSize + size);
 
-# if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
-#  ifdef RZ_DEBUG
+# if defined(RZ_DEBUG) && defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
   Log(kLog, __FILE__, __LINE__, "fill redzone at start of span at", (void*)ptr);
-#  endif
-  ASSERT(ptr + size + kRedzoneSize <= limit);
-  memset(ptr, kRedzoneValue, kRedzoneSize);
 # endif
+  MaybePoisonRedzone(ptr);
 
   ptr += kRedzoneSize;
 #endif // RZ_ALLOC

@@ -448,7 +448,8 @@ S_TCMALLOC_MINIMAL_INCLUDES = src/common.h \
                               src/malloc_hook_mmap_linux.h \
                               src/malloc_hook_mmap_freebsd.h \
                               src/heap-redzone-check.h \
-                              src/large-freelist.h
+                              src/large-freelist.h \
+                              src/redzone-poisoning.h
 SG_TCMALLOC_MINIMAL_INCLUDES = src/gperftools/malloc_hook.h \
                                src/gperftools/malloc_hook_c.h \
                                src/gperftools/malloc_extension.h \
@@ -476,6 +477,7 @@ libtcmalloc_minimal_internal_la_SOURCES = src/common.cc \
                                           src/malloc_extension.cc \
                                           src/heap-redzone-check.cc \
                                           src/large-freelist.cc \
+                                          src/redzone-poisoning.cc \
                                           $(TCMALLOC_MINIMAL_INCLUDES)
 # We #define NO_TCMALLOC_SAMPLES, since sampling is turned off for _minimal.
 libtcmalloc_minimal_internal_la_CXXFLAGS = -DNO_TCMALLOC_SAMPLES \

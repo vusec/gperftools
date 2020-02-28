@@ -133,6 +133,7 @@
 #include "tcmalloc_guard.h"    // for TCMallocGuard
 #include "thread_cache.h"      // for ThreadCache
 #include "large-freelist.h"    // for LargeFreeList, LFL_LOG
+#include "redzone-poisoning.h" // for MaybePoisonRedzone
 
 #include "maybe_emergency_malloc.h"
 
@@ -165,6 +166,7 @@ using tcmalloc::ThreadCache;
 #ifdef RZ_REUSE_HEAP
 using tcmalloc::LargeFreeList;
 #endif
+using tcmalloc::MaybePoisonRedzone;
 
 DECLARE_double(tcmalloc_release_rate);
 
@@ -1160,25 +1162,22 @@ static inline size_t AddRedzone(size_t size, size_t rzsize = kRedzoneSize) {
 static inline void *AddAndFillLargeRedzoneAtStart(void *startptr) {
   char *ptr = static_cast<char*>(startptr);
 #ifdef RZ_ALLOC
-# if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
-#  ifdef RZ_DEBUG
+# if defined(RZ_DEBUG) && defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
   Log(kLog, __FILE__, __LINE__, "fill redzone at", startptr);
-#  endif
-  memset(ptr, kRedzoneValue, kLargeRedzoneSize);
 # endif
+  MaybePoisonRedzone(ptr, kLargeRedzoneSize);
   ptr += kLargeRedzoneSize;
 #endif
   return ptr;
 }
 
 static inline void FillRedzoneAtEnd(void *startptr, size_t allocsize, size_t rzsize = kRedzoneSize) {
-#if defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
   char *ptr = static_cast<char*>(startptr) + allocsize - rzsize;
-# ifdef RZ_DEBUG
-  Log(kLog, __FILE__, __LINE__, "fill redzone at", (void*)ptr, " at the end of bytes:", allocsize);
-# endif
-  memset(ptr, kRedzoneValue, rzsize);
+#if defined(RZ_DEBUG) && defined(RZ_FILL) && !defined(RZ_REUSE_HEAP)
+  Log(kLog, __FILE__, __LINE__, "fill redzone at", (void*)ptr,
+      " at the end of bytes:", allocsize);
 #endif
+  MaybePoisonRedzone(ptr, rzsize);
 }
 
 //-------------------------------------------------------------------
