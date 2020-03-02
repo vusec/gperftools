@@ -25,13 +25,6 @@ static inline shadow_t *ShadowPtr(void *ptr) {
 static inline void SetRedzone(void *ptr, bool poison, size_t size) {
 #ifndef RZ_REUSE_HEAP
 
-# ifdef RZ_FILL
-#  ifdef RZ_DEBUG
-  Log(kLog, __FILE__, __LINE__, "-", poison ? "fill with" : "clear", "guard value");
-#  endif
-  memset(ptr, poison ? kRedzoneValue : 0, size);
-# endif
-
 # ifdef RZ_SHADOWMEM
 #  ifdef RZ_DEBUG
   Log(kLog, __FILE__, __LINE__, "-", poison ? "poison" : "unpoison", "shadow memory");
@@ -40,6 +33,13 @@ static inline void SetRedzone(void *ptr, bool poison, size_t size) {
   ASSERT((size & SHADOW_ALIGN_MASK) == 0);
   const int shadowval = poison ? SHADOW_REDZONE_MAGIC : 0;
   memset(ShadowPtr(ptr), shadowval, size >> SHADOW_SCALE);
+# endif
+
+# ifdef RZ_FILL
+#  ifdef RZ_DEBUG
+  Log(kLog, __FILE__, __LINE__, "-", poison ? "fill with" : "clear", "guard value");
+#  endif
+  memset(ptr, poison ? kRedzoneValue : 0, size);
 # endif
 
 #endif // !RZ_REUSE_HEAP
